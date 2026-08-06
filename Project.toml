@@ -3,6 +3,16 @@ uuid = "4c79419a-a1d9-4c73-822e-185c42e27cb7"
 authors = ["adrianaghiozzi <67669644+adrianaghiozzi@users.noreply.github.com> and contributors"]
 version = "1.0.0-DEV"
 
+[deps]
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+GeneralizedPerturbedEquilibrium = "462872dd-e066-4d2e-b993-6468b5239634"
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
+[sources]
+GeneralizedPerturbedEquilibrium = {path = "/Users/adrianaghiozzi/Code/Sources/GPEC"}
+
 [compat]
 julia = "1.10.10"
 
