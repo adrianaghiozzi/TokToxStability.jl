@@ -4,48 +4,44 @@ using Printf
 
 # function read_profiles_from_toktox and write those out to the Profiles object (this is the alternative to getting the profiles from a KEFIT)
 
+default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "p")
 
-default_tag(frac::Real) = "f" * replace(@sprintf("%.4f", frac), "." => "p")
-
-function coarse_scan(fracs::Vector{<:Real}, profiles::Profiles, n_tor, wall, kinetic, work_dir; verbose::Bool = false)
+function coarse_scan(fractions::Vector{<:Real}, profiles::Profiles, toroidal_mode_number, wall, kinetic, working_directory; verbose::Bool = false)
     coarse_scan_results = []
-    for frac in fracs
+    for fraction in fractions
         try
-            result = evaluate_factor(profiles, frac, n_tor, wall, kinetic, work_dir; verbose)
-            @show typeof(result)
-            @show result.frac
+            result = evaluate_factor(deepcopy(profiles), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
             push!(coarse_scan_results, result)
         catch e 
             println(e)
-            continue # put a retry in here
+            continue
         end
     end
     return coarse_scan_results
-
 end
 
-function evaluate_factor(profiles::Profiles, frac::Real, n_tor::Int,
+function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_number::Int,
                           wall::Dict{String,<:Any}, kinetic::Dict{String,<:Any},
-                          work_dir::String; tag::Union{String,Nothing}=nothing,
+                          working_directory::String; tag::Union{String,Nothing}=nothing,
                           parallel_threads::Int=2, verbose::Bool=false)
-    tag = something(tag, default_tag(frac))
-    run_directory = joinpath(work_dir, tag)
+    tag = something(tag, default_tag(fraction))
+    run_directory = joinpath(working_directory, tag)
 
     tkm = quietly(; verbose) do
-        solve_at_pressure_factor!(profiles, frac)
+        solve_at_pressure_factor!(profiles, fraction)
     end
 
     geqdsk_path = write_geqdsk_for_gpec(run_directory, tag)
-    eq_filename = basename(geqdsk_path)
+    equilibrium_filename = basename(geqdsk_path)
 
-    gi = GPECInput(eq_filename=eq_filename, n_tor=n_tor, wall=wall,
+    gi = GPECInput(equilibrium_filename=equilibrium_filename, toroidal_mode_number=toroidal_mode_number, wall=wall,
                     kinetic=kinetic, parallel_threads=parallel_threads)
     gpec_raw = quietly(; verbose) do
         run_GPEC(gi, run_directory)
     end
     gp = read_output(gpec_raw)
 
-    return (frac=frac, tag=tag, beta_n=tkm.beta_n, beta_t=tkm.beta_t,
+    return (fraction=fraction, tag=tag, beta_n=tkm.beta_n, beta_t=tkm.beta_t,
             p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
             dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
             run_dir=run_directory)
@@ -102,8 +98,8 @@ function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
     )
 end
 
-function solve_at_pressure_factor!(profiles::Profiles, frac::Real)
-    new_profiles = rescale_profile!(profiles, frac)
+function solve_at_pressure_factor!(profiles::Profiles, fraction::Real)
+    new_profiles = rescale_profile!(profiles, fraction)
     nl_its, stats, beta_n, beta_t = tokamaker_run(new_profiles)
 end
 

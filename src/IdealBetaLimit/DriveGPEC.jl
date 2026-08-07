@@ -1,8 +1,8 @@
 using GeneralizedPerturbedEquilibrium
 
 Base.@kwdef mutable struct GPECInput
-    eq_filename::String                  # basename of the gEQDSK staged in test_dir
-    n_tor::Int                           # toroidal mode number (nn_low = nn_high)
+    equilibrium_filename::String                  # basename of the gEQDSK staged in test_dir
+    toroidal_mode_number::Int                           # toroidal mode number (nn_low = nn_high)
     wall::Dict{String,<:Any}               # must contain "shape", plus shape-specific params
     kinetic::Dict{String,<:Any} = Dict("kinetic_source" => "fixed", "kinetic_factor" => 0.0)
     parallel_threads::Int = 2
@@ -10,7 +10,7 @@ end
 
 function run_GPEC(gi::GPECInput, test_dir::String)
     mkpath(test_dir)
-    toml_str = make_gpec_toml(gi.eq_filename, gi.n_tor, gi.wall, gi.kinetic;
+    toml_str = make_gpec_toml(gi.equilibrium_filename, gi.toroidal_mode_number, gi.wall, gi.kinetic;
                                parallel_threads=gi.parallel_threads)
     write(joinpath(test_dir, "gpec.toml"), toml_str)
 
@@ -32,13 +32,13 @@ function read_output(output::NamedTuple)
 end
 
 """
-    make_gpec_toml(eq_filename, n_tor, wall, kinetic; parallel_threads=2)
+    make_gpec_toml(equilibrium_filename, toroidal_mode_number, wall, kinetic; parallel_threads=2)
 
 Return the full gpec.toml as a string, with inline comments preserved.
 
 # Arguments
-- `eq_filename` — basename of the gEQDSK staged in the run directory.
-- `n_tor`       — toroidal mode number (nn_low = nn_high = n_tor).
+- `equilibrium_filename` — basename of the gEQDSK staged in the run directory.
+- `toroidal_mode_number`       — toroidal mode number (nn_low = nn_high = toroidal_mode_number).
 - `wall`        — must contain `"shape"`, plus shape-specific params.
 - `kinetic`     — `"kinetic_source"`, `"kinetic_factor"`.
 
@@ -49,9 +49,9 @@ No `output_h5`/`HDF5_filename` here — HDF5 output is disabled entirely
 (`write_outputs_to_HDF5 = false`) since results come back directly from
 `GeneralizedPerturbedEquilibrium.main([test_dir])`'s return value now.
 """
-function make_gpec_toml(eq_filename, n_tor, wall, kinetic; parallel_threads::Integer=2) # eventually get rid of file writing in favor of direct calls to GPEC functions
+function make_gpec_toml(equilibrium_filename, toroidal_mode_number, wall, kinetic; parallel_threads::Integer=2) # eventually get rid of file writing in favor of direct calls to GPEC functions
     wall_block      = _wall_toml(wall) # wall/no wall also exposed to the user 
-    n_tor_int       = Int(n_tor) # the toroidal mode number should be exposed to the user 
+    n_tor_int       = Int(toroidal_mode_number) # the toroidal mode number should be exposed to the user 
     kinetic_source  = kinetic["kinetic_source"]
     kinetic_factor  = Float64(kinetic["kinetic_factor"])
     pthreads        = Int(parallel_threads)
@@ -61,7 +61,7 @@ function make_gpec_toml(eq_filename, n_tor, wall, kinetic; parallel_threads::Int
 # CTM-processing/CONVENTIONS.md (DIII-D 147131 reference settings).
 
 [Equilibrium]
-eq_filename = "$eq_filename"
+eq_filename = "$equilibrium_filename"
 eq_type     = "efit"          # gEQDSK reader (vs. "chease", "tj_analytic", ...)
 jac_type    = "hamada"        # Hamada (straight-field-line) coordinates
 # NOTE: power_bp / power_b / power_r were REMOVED (deprecated) on develop.
