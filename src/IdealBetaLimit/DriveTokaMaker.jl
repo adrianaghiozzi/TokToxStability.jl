@@ -47,15 +47,6 @@ function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_numbe
             run_dir=run_directory)
 end
 
-# something like tokamaker_run(profiles::Vector(Profiles)) to do the looping part 
-function tokamaker_run(profiles::Vector{Profiles}; n_settle::Int = 3)
-    # do the profile rescaling 
-    # write the intermediate file 
-    # run tokamaker for that one profile
-    # do it again 
-
-end
-
 function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
     profiles.pressure === nothing && error("profiles.pressure is nothing -- call rescale_profile first")
     isassigned(_mygs) || error("no TokaMaker instance set up -- run the setup_test_case cell first")
