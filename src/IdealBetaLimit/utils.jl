@@ -26,14 +26,19 @@ function read_profiles_from_file(path::String)
     cols = Dict(strip(String(h)) => i for (i, h) in enumerate(header))
  
     col(name) = Vector{Float64}(data[:, cols[name]])
+    Ti = col("ti(eV)")
+    Te = col("te(eV)")
+    ni = col("ni(m^-3)")
+    ne = col("ne(m^-3)")
+    pressure = boltzmann_constant .* (ne .* Te .+ ni .* Ti)
  
     return Profiles(
-        col("ti(eV)"),
-        col("te(eV)"),
-        col("ni(m^-3)"),
-        col("ne(m^-3)"),
+        Ti,
+        Te,
+        ni,
+        ne,
         col("psi"),
-        nothing,
+        pressure,
         nothing
     )
 end

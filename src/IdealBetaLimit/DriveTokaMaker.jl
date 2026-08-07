@@ -27,8 +27,8 @@ function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_numbe
     tag = something(tag, default_tag(fraction))
     run_directory = joinpath(working_directory, tag)
 
-    tkm = quietly(; verbose) do
-        solve_at_pressure_factor!(profiles, fraction)
+    nl_its, stats, beta_n, beta_t = quietly(; verbose) do
+        solve_at_pressure_factor(profiles, fraction)
     end
 
     geqdsk_path = write_geqdsk_for_gpec(run_directory, tag)
@@ -41,14 +41,13 @@ function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_numbe
     end
     gp = read_output(gpec_raw)
 
-    return (fraction=fraction, tag=tag, beta_n=tkm.beta_n, beta_t=tkm.beta_t,
+    return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t,
             p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
             dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
             run_dir=run_directory)
 end
 
 function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
-    profiles.pressure === nothing && error("profiles.pressure is nothing -- call rescale_profile first")
     isassigned(_mygs) || error("no TokaMaker instance set up -- run the setup_test_case cell first")
  
     mygs          = _mygs[]
@@ -89,9 +88,10 @@ function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
     )
 end
 
-function solve_at_pressure_factor!(profiles::Profiles, fraction::Real)
-    new_profiles = rescale_profile!(profiles, fraction)
-    nl_its, stats, beta_n, beta_t = tokamaker_run(new_profiles)
+function solve_at_pressure_factor(profiles::Profiles, fraction::Real)
+    rescale_profile!(profiles, fraction)
+    nl_its, stats, beta_n, beta_t = tokamaker_run(profiles)
+    return nl_its, stats, beta_n, beta_t
 end
 
 function write_geqdsk_for_gpec(run_directory::String, tag, nr::Int=257, nz::Int=257)
