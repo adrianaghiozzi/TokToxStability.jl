@@ -2,15 +2,13 @@ using PythonCall
 using DelimitedFiles
 using Printf
 
-# function read_profiles_from_toktox and write those out to the Profiles object (this is the alternative to getting the profiles from a KEFIT)
-
 default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "p")
 
-function coarse_scan(fractions::Vector{<:Real}, profiles::Profiles, toroidal_mode_number, wall, kinetic, working_directory; verbose::Bool = false)
+function coarse_scan(fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles, toroidal_mode_number, wall, kinetic, working_directory; verbose::Bool = false)
     coarse_scan_results = []
     for fraction in fractions
         try
-            result = evaluate_factor(deepcopy(profiles), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
+            result = evaluate_factor(deepcopy(profiles),deepcopy(equilibrium), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
             push!(coarse_scan_results, result)
         catch e 
             println(e)
@@ -20,7 +18,7 @@ function coarse_scan(fractions::Vector{<:Real}, profiles::Profiles, toroidal_mod
     return coarse_scan_results
 end
 
-function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_number::Int,
+function evaluate_factor(profiles::Profiles, equilibrium::Equilibrium, fraction::Real, toroidal_mode_number::Int,
                           wall::Dict{String,<:Any}, kinetic::Dict{String,<:Any},
                           working_directory::String; tag::Union{String,Nothing}=nothing,
                           parallel_threads::Int=2, verbose::Bool=false)
@@ -28,7 +26,7 @@ function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_numbe
     run_directory = joinpath(working_directory, tag)
 
     nl_its, stats, beta_n, beta_t = quietly(; verbose) do
-        solve_at_pressure_factor(profiles, fraction)
+        solve_at_pressure_factor(profiles, equilibrium, fraction)
     end
 
     geqdsk_path = write_geqdsk_for_gpec(run_directory, tag)
@@ -47,28 +45,24 @@ function evaluate_factor(profiles::Profiles, fraction::Real, toroidal_mode_numbe
             run_dir=run_directory)
 end
 
-function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
+function tokamaker_run(profiles::Profiles, equilibrium::Equilibrium; n_settle::Int = 3)
     isassigned(_mygs) || error("no TokaMaker instance set up -- run the setup_test_case cell first")
- 
-    mygs          = _mygs[]
-    psi_tkmkr     = _psi_tkmkr[]
-    jphi_baseline = _jphi_baseline[]
-    ip_target     = _ip_target[]
- 
+    mygs          = _mygs[] 
     nl_its = nothing
+
     for _ in 1:n_settle
         psi_bounds = mygs.psi_bounds
         psi_b0 = pyconvert(Float64, psi_bounds[0])
         psi_b1 = pyconvert(Float64, psi_bounds[1])
  
         profiles.pprime = np_gradient(profiles.pressure) ./
-                           (np_gradient(psi_tkmkr) .* (psi_b1 - psi_b0))
+                           (np_gradient(equilibrium.Psi) .* (psi_b1 - psi_b0))
  
-        mygs.set_targets(Ip=ip_target, pax=profiles.pressure[1])
+        mygs.set_targets(Ip=equilibrium.Ip_target, pax=profiles.pressure[1])
  
         mygs.set_profiles(
-            pp_prof  = Dict("type" => "linterp",      "y" => profiles.pprime,  "x" => psi_tkmkr),
-            ffp_prof = Dict("type" => "jphi-linterp", "y" => jphi_baseline,    "x" => profiles.Psi),
+            pp_prof  = Dict("type" => "linterp",      "y" => profiles.pprime,  "x" => equilibrium.Psi),
+            ffp_prof = Dict("type" => "jphi-linterp", "y" => equilibrium.Jphi,    "x" => equilibrium.Psi),
         )
  
         try
@@ -88,9 +82,9 @@ function tokamaker_run(profiles::Profiles; n_settle::Int = 3)
     )
 end
 
-function solve_at_pressure_factor(profiles::Profiles, fraction::Real)
+function solve_at_pressure_factor(profiles::Profiles, equilibrium::Equilibrium, fraction::Real)
     rescale_profile!(profiles, fraction)
-    nl_its, stats, beta_n, beta_t = tokamaker_run(profiles)
+    nl_its, stats, beta_n, beta_t = tokamaker_run(profiles, equilibrium)
     return nl_its, stats, beta_n, beta_t
 end
 
