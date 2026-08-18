@@ -3,11 +3,7 @@ using Logging
 
 const boltzmann_constant = 1.6022e-19
 
-# just for testing, get rid of this later #
-const _mygs          = Ref{Py}() 
-###########################################
-
-Base.@kwdef mutable struct Profiles 
+Base.@kwdef mutable struct Profiles
     Ti::Union{Vector{Float64},Nothing}
     Te::Union{Vector{Float64},Nothing}
     ni::Union{Vector{Float64},Nothing}
@@ -149,12 +145,15 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     ip_target = abs(eqdsk["ip"])
     """ => (mygs, psi_tkmkr::Vector{Float64}, jphi_baseline::Vector{Float64}, ip_target::Float64)
 
-    TokToxStability._mygs[]          = result.mygs # get rid of this global thing
     equilibrium.Psi     = result.psi_tkmkr
     equilibrium.Jphi = result.jphi_baseline
     equilibrium.Ip_target     = result.ip_target
-    return nothing
-end 
+    return result.mygs
+end
+
+function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium; oft_root::String)
+    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium; oft_root)
+end
 
 # in the future could add setup_tokamaker_from_file(::Val{:ITER})
 
