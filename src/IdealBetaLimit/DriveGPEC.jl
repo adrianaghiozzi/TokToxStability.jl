@@ -19,16 +19,18 @@ function run_GPEC(gi::GPECInput, test_dir::String)
 end
 
 function read_output(output::NamedTuple)
-    vd = output.vac_data 
+    ffs = output.ffs
+    vd = ffs.free_boundary
+    vd === nothing && error("read_output: no free_boundary result -- was vac_flag=true in gpec.toml?")
 
     return(
         dW_total = real(vd.et[1]),
         dW_plasma = real(vd.ep[1]),
         dW_vacuum = real(vd.ev[1]),
         et_full = vd.et,
-        q0 = output.equil.params.q0,
-        qmax = something(output.equil.params.qmax, output.intr.qlim),
-        msing = output.intr.msing) 
+        q0 = ffs.equil.params.q0,
+        qmax = something(ffs.equil.params.qmax, ffs.qlim),
+        msing = length(ffs.surfaces))
 end
 
 """
