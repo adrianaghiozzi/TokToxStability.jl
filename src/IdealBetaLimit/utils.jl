@@ -63,15 +63,15 @@ end
 # function setup_from_tmtx and write TMTX results to the Profiles and Equilibrium objects (this is the alternative to getting the profiles from a KEFIT)
 
 
-function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium; oft_root::String)
+function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
     kin_nr = length(equilibrium.Psi)
     d3d_case_dir = joinpath(pkgdir(TokToxStability), "cases", "D3D")
     mesh_file = joinpath(d3d_case_dir, "DIIID_mesh.h5")
-    geqdsk_file = joinpath(d3d_case_dir, "g147131.02300_DIIID_KEFIT")
+    geqdsk_file = joinpath(d3d_case_dir, "g147131.02300_DIIID_KEFIT.eqdsk")
 
     result = @pyexec (
         OFT_ROOT=oft_root, MESH_FILE=mesh_file, GEQDSK_FILE=geqdsk_file,
-        psi_prof=equilibrium.Psi, kin_nr=kin_nr,
+        psi_prof=equilibrium.Psi, kin_nr=kin_nr, myOFT=myOFT,
     ) => """
     import sys, os
     import numpy as np
@@ -86,14 +86,12 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     assert _oft_pkg.__file__.startswith(OFT_ROOT), (
         f"Wrong OpenFUSIONToolkit loaded: {_oft_pkg.__file__} (wanted {OFT_ROOT})")
 
-    from OpenFUSIONToolkit import OFT_env
     from OpenFUSIONToolkit.TokaMaker import TokaMaker
     from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
     from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
     eqdsk = read_eqdsk(GEQDSK_FILE)
 
-    myOFT = OFT_env(nthreads=2)
     mygs  = TokaMaker(myOFT)
     mygs.settings.maxits = 200
 
@@ -151,11 +149,27 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     return result.mygs
 end
 
-function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium; oft_root::String)
-    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium; oft_root)
+function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
+    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium, myOFT; oft_root)
 end
 
 # in the future could add setup_tokamaker_from_file(::Val{:ITER})
+
+# function mtanh_pedestal_profile(rho::Vector{<:Real}, pedestal_top::Real, foot::Real, core_slope::Real, knee::Real, half_width::Real, blend::Real)
+#     t_inner = tanh((knee - rho[1]) / half_width)
+#     t_foot = tanh((knee - 1.0) / half_width)
+#     A = (pedestal_top - foot) / (t_inner - t_foot)
+#     B = foot - A * t_foot 
+#     ped = A * tanh((knee - rho) / half_width) + B 
+#     core_line = pedestal_top + core_slope * (rho .- rho[1])
+#     w = 1.0 / (1.0 + exp(-(rho - knee) / blend)) 
+#     return (1.0 - w) * core_line + w*ped 
+# end
+
+function tanh_pedestal_profile(psi::AbstractVector{<:Real}, core::Real, edge::Real,
+                                psi_ped::Real=0.9, width::Real=0.05)
+    return @. edge + (core - edge) * 0.5 * (1 - tanh((psi - psi_ped) / width))
+end
 
 function np_gradient(f::AbstractVector{<:Real}) # replace this later with native Julia gradient 
     n = length(f)

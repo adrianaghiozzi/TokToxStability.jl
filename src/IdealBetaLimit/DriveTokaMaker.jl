@@ -50,6 +50,13 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
         solve_at_pressure_factor(mygs, profiles, equilibrium, fraction)
     end
 
+    # Full q(psi) profile at this fraction's converged equilibrium -- kept
+    # alongside the scalar q0/qmax (from GPEC, below) for per-iteration
+    # plotting (see plots.jl). `*_` absorbs any extra return values (e.g.
+    # flux-surface-averaged geometry terms) so this doesn't break if
+    # `get_q`'s return shape grows in a future TokaMaker version.
+    psi_q, q_profile, _ravgs, _rest... = pyconvert(Tuple, mygs.get_q(npsi=length(equilibrium.Psi), psi_pad=0.001))
+
     geqdsk_path = write_geqdsk_for_gpec(mygs, run_directory, tag)
     equilibrium_filename = basename(geqdsk_path)
 
@@ -63,13 +70,19 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
     return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
             p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
             dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
-            run_dir=run_directory)
+            run_dir=run_directory, geqdsk_path=geqdsk_path,
+            # Per-iteration profile/q snapshots for plots.jl. `psi` is the
+            # grid `profiles`/`equilibrium` are already sampled on (post
+            # rescale_profile!), so these all line up index-for-index.
+            psi=copy(equilibrium.Psi), Te=copy(profiles.Te), Ti=copy(profiles.Ti),
+            ne=copy(profiles.ne), pressure=copy(profiles.pressure),
+            psi_q=pyconvert(Vector{Float64}, psi_q), q_profile=pyconvert(Vector{Float64}, q_profile))
 end
 
 """
     coarse_scan_until_unstable(mygs, start_fraction, step, equilibrium, profiles,
                                 toroidal_mode_number, wall, kinetic, working_directory;
-                                extra_past_crossing=1, max_fractions=20, verbose=false)
+                                extra_past_crossing=1, max_fractions=8, verbose=false)
 
 Runs `evaluate_factor` (TokaMaker + GPEC) sequentially in ascending pressure
 fraction, starting at `start_fraction` and incrementing by `step` each time,
@@ -89,19 +102,22 @@ crossing is bracketed rather than running to a preset end fraction.
 Continues for `extra_past_crossing` fractions past the first negative
 `dW_total` so the returned scan brackets the crossing with a bit of slope
 context (matching the shape of a typical hand-picked reference scan).
-`max_fractions` is a hard cap in case `dW_total` never goes negative (e.g.
+`max_fractions` is a hard cap on the number of fractions attempted (whether
+or not each one converges), in case `dW_total` never goes negative (e.g.
 `start_fraction`/`step` too small/large for this equilibrium) -- a warning
 is issued rather than looping forever.
 """
 function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, equilibrium::Equilibrium, profiles::Profiles,
                                      toroidal_mode_number, wall::Dict{String,<:Any}, kinetic::Dict{String,<:Any},
-                                     working_directory; extra_past_crossing::Int=1, max_fractions::Int=20, verbose::Bool=false)
+                                     working_directory; extra_past_crossing::Int=1, max_fractions::Int=8, verbose::Bool=false)
     step > 0 || error("coarse_scan_until_unstable: step must be positive (ascending scan)")
 
     results = []
     crossed_at = nothing
     fraction = start_fraction
-    while length(results) < max_fractions
+    attempts = 0
+    while attempts < max_fractions
+        attempts += 1
         result = try
             evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
         catch e
@@ -125,6 +141,97 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
                                      "-- results may not bracket the true beta limit"
 
     return results
+end
+
+"""
+    _interp_zero_crossing(xs, ys) -> (crossing, lo, hi, bracketed::Bool)
+
+Generic zero-crossing helper shared by `estimate_beta_limit` (over
+`beta_n`/`dW_total`) and `plots.jl`'s `plot_beta_scan_summary` (over
+`fraction`/`dW_total`, to place the same estimated crossing on a
+fraction-space x-axis). See `estimate_beta_limit`'s docstring for the
+bracketed-vs-extrapolated behavior this implements; this just operates on
+plain vectors instead of `coarse_scan` result rows.
+"""
+function _interp_zero_crossing(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
+    order = sortperm(xs)
+    xs, ys = xs[order], ys[order]
+
+    for i in 1:length(xs)-1
+        if ys[i] >= 0 && ys[i+1] < 0
+            t = ys[i] / (ys[i] - ys[i+1])
+            crossing = xs[i] + t * (xs[i+1] - xs[i])
+            return (crossing=crossing, lo=xs[i], hi=xs[i+1], bracketed=true)
+        end
+    end
+
+    n = length(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((xs .- mean_x) .^ 2)
+    denom == 0 && error("_interp_zero_crossing: all x values are identical -- cannot fit a line.")
+    slope = sum((xs .- mean_x) .* (ys .- mean_y)) / denom
+    slope == 0 && error("_interp_zero_crossing: y values are flat (zero slope) -- cannot extrapolate a crossing.")
+    intercept = mean_y - slope * mean_x
+    crossing = -intercept / slope
+
+    return (crossing=crossing, lo=first(xs), hi=last(xs), bracketed=false)
+end
+
+"""
+    estimate_beta_limit(results; verbose=true) -> (beta_n_crossing, beta_n_lo, beta_n_hi, bracketed::Bool)
+
+Estimates the ideal-MHD marginal-stability beta_N limit (where `dW_total`
+crosses zero) from `results` -- the vector of NamedTuples returned by
+`coarse_scan`/`coarse_scan_until_unstable`, each expected to have `beta_n`
+and `dW_total` fields.
+
+If the scan actually BRACKETS a stable (`dW_total >= 0`) -> unstable
+(`dW_total < 0`) transition between two adjacent points (sorted by
+`beta_n`), `beta_n_crossing` is linearly interpolated strictly between
+those two points, and `beta_n_lo`/`beta_n_hi` are their exact, calculated
+beta_N values (`bracketed = true`) -- i.e. the real bounds the scan
+achieved, not an extrapolation.
+
+If no such transition is found (e.g. `coarse_scan_until_unstable` hit
+`max_fractions` while still stable everywhere, or the scan started already
+unstable), this issues a `@warn` and instead fits a straight line through
+ALL scanned (beta_n, dW_total) points -- ordinary least squares for 3+
+points, the exact two-point line for exactly 2 -- and extrapolates it to
+`dW_total = 0`. `beta_n_lo`/`beta_n_hi` in this case report the min/max
+beta_N actually scanned (NOT the crossing bounds), so the gap between them
+and `beta_n_crossing` shows how far the extrapolation reaches beyond real
+data. `bracketed = false` flags that `beta_n_crossing` here is a rough
+extrapolated guess, not a calculated bound.
+"""
+function estimate_beta_limit(results::AbstractVector; verbose::Bool=true)
+    length(results) >= 2 || error("estimate_beta_limit needs at least 2 scanned points, got $(length(results))")
+
+    beta_n = [r.beta_n for r in results]
+    dW = [r.dW_total for r in results]
+    res = _interp_zero_crossing(beta_n, dW)
+
+    if res.bracketed
+        verbose && println(
+            "estimate_beta_limit: dW_total crossing bracketed between the scanned points " *
+            "beta_N=$(round(res.lo; digits=4)) and beta_N=$(round(res.hi; digits=4)) -- " *
+            "interpolated crossing at beta_N=$(round(res.crossing; digits=4))."
+        )
+        return (beta_n_crossing=res.crossing, beta_n_lo=res.lo, beta_n_hi=res.hi, bracketed=true)
+    end
+
+    @warn "estimate_beta_limit: no stable->unstable dW_total transition found across the " *
+          "$(length(results)) scanned points (beta_n in [$(res.lo), $(res.hi)]) -- " *
+          "extrapolating a line through the scanned points instead of interpolating between " *
+          "bracketing points. Treat the resulting beta_N as a rough guess, not a calculated bound; " *
+          "scan further to actually bracket the crossing."
+
+    verbose && println(
+        "estimate_beta_limit: extrapolated (unbracketed) crossing at beta_N=$(round(res.crossing; digits=4)), " *
+        "from a line fit through beta_N in [$(round(res.lo; digits=4)), $(round(res.hi; digits=4))]."
+    )
+
+    return (beta_n_crossing=res.crossing, beta_n_lo=res.lo, beta_n_hi=res.hi, bracketed=false)
 end
 
 function tokamaker_run(mygs::Py, profiles::Profiles, equilibrium::Equilibrium; n_settle::Int = 3)

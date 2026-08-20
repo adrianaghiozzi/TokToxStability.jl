@@ -6,6 +6,7 @@ module TokToxStability
     include("IdealBetaLimit/DriveGPEC.jl")
     include("IdealBetaLimit/DriveTokTox.jl")
     include("IdealBetaLimit/DriveTokaMaker.jl")
+    include("IdealBetaLimit/plots.jl")
 
-# future channels here e.g. tearing stability 
+# future channels here e.g. tearing stability
 end

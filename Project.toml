@@ -8,6 +8,7 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 GeneralizedPerturbedEquilibrium = "462872dd-e066-4d2e-b993-6468b5239634"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 
@@ -16,6 +17,7 @@ GeneralizedPerturbedEquilibrium = {path = "/Users/adrianaghiozzi/Code/Sources/GP
 
 [compat]
 DataFrames = "1.8.2"
+Plots = "1.41.7"
 julia = "1.10.10"
 
 [extras]
