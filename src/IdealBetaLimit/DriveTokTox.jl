@@ -94,19 +94,19 @@ mirroring the mesh/setup portion of `setup_tokamaker_from_file!` (utils.jl)
 and cell 1.4 of the ITER notebook. Does NOT solve an equilibrium here --
 TokaMaker_TORAX drives the solve itself once `fly()` is called.
 """
-function build_seed_tokamaker(inp::TMTXInput, myOFT::Py)
-    _ensure_oft_on_path!(inp.oft_root)
+function build_seed_tokamaker(tmtx_input::TMTXInput, myOFT::Py)
+    _ensure_oft_on_path!(tmtx_input.oft_root)
 
     TokaMaker = pyimport("OpenFUSIONToolkit.TokaMaker").TokaMaker
     meshing   = pyimport("OpenFUSIONToolkit.TokaMaker.meshing")
     util      = pyimport("OpenFUSIONToolkit.TokaMaker.util")
 
-    eqdsk = util.read_eqdsk(inp.seed_geqdsk)
+    eqdsk = util.read_eqdsk(tmtx_input.seed_geqdsk)
 
     mygs  = TokaMaker(myOFT)
     mygs.settings.maxits = 200
 
-    mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = meshing.load_gs_mesh(inp.mesh_file)
+    mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = meshing.load_gs_mesh(tmtx_input.mesh_file)
     mygs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
     mygs.setup_regions(cond_dict=cond_dict, coil_dict=coil_dict)
 
@@ -123,19 +123,19 @@ end
 Constructs the TokaMaker_TORAX object with the equilibrium pinned to the
 seed geqdsk at both ends of the window (time-independent).
 """
-function build_tmtx(inp::TMTXInput, mygs::Py)
+function build_tmtx(tmtx_input::TMTXInput, mygs::Py)
     pulse_design = pyimport("OpenFUSIONToolkit.TokaMaker.pulse_design")
     np           = pyimport("numpy")
 
-    tm_times = np.linspace(0.0, inp.t_final, 3)
+    tm_times = np.linspace(0.0, tmtx_input.t_final, 3)
 
     tmtx = pulse_design.TokaMaker_TORAX(
         t_init=0.0,
-        t_final=inp.t_final,
-        tx_dt=inp.tx_dt,
-        eqtimes=np.array([0.0, inp.t_final]),
-        g_eqdsk_arr=[inp.seed_geqdsk, inp.seed_geqdsk],  # fixed equilibrium -> time-independent
-        last_surface_factor=inp.last_surface_factor,
+        t_final=tmtx_input.t_final,
+        tx_dt=tmtx_input.tx_dt,
+        eqtimes=np.array([0.0, tmtx_input.t_final]),
+        g_eqdsk_arr=[tmtx_input.seed_geqdsk, tmtx_input.seed_geqdsk],  # fixed equilibrium -> time-independent
+        last_surface_factor=tmtx_input.last_surface_factor,
         tm_times=tm_times,
         tokamaker_obj=mygs,
     )
@@ -149,32 +149,32 @@ Applies the tmtx.set* calls (ITER notebook Â§1.7-1.8). Coil bounds are built
 generically from whatever coil sets the D3D mesh actually defines, rather
 than hardcoding ITER's CS/PF/VS naming convention.
 """
-function configure_tmtx!(tmtx::Py, mygs::Py, inp::TMTXInput)
-    tmtx.set_TORAX_grid(grid_type="n_rho", grid=inp.torax_n_rho)
+function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
+    tmtx.set_TORAX_grid(grid_type="n_rho", grid=tmtx_input.torax_n_rho)
 
-    tmtx.set_heating(; (Symbol(k) => v for (k, v) in inp.heating)...)
-    tmtx.set_fueling(; (Symbol(k) => v for (k, v) in inp.fueling)...)
+    tmtx.set_heating(; (Symbol(k) => v for (k, v) in tmtx_input.heating)...)
+    tmtx.set_fueling(; (Symbol(k) => v for (k, v) in tmtx_input.fueling)...)
 
     array_to_profile_dict(arr, grid) = pydict(Dict(Float64(p) => Float64(v) for (p, v) in zip(grid, arr)))
     t0 = 0.0
-    tmtx.set_ne(pydict(Dict(t0 => array_to_profile_dict(inp.ne_init, inp.psi_sample))), right_bc=inp.ne_edge)
-    tmtx.set_Te(pydict(Dict(t0 => array_to_profile_dict(inp.Te_init, inp.psi_sample))), right_bc=inp.Te_edge)
-    tmtx.set_Ti(pydict(Dict(t0 => array_to_profile_dict(inp.Ti_init, inp.psi_sample))), right_bc=inp.Ti_edge)
+    tmtx.set_ne(pydict(Dict(t0 => array_to_profile_dict(tmtx_input.ne_init, tmtx_input.psi_sample))), right_bc=tmtx_input.ne_edge)
+    tmtx.set_Te(pydict(Dict(t0 => array_to_profile_dict(tmtx_input.Te_init, tmtx_input.psi_sample))), right_bc=tmtx_input.Te_edge)
+    tmtx.set_Ti(pydict(Dict(t0 => array_to_profile_dict(tmtx_input.Ti_init, tmtx_input.psi_sample))), right_bc=tmtx_input.Ti_edge)
 
-    tmtx.load_pedestal_config(pydict(inp.pedestal))
+    tmtx.load_pedestal_config(pydict(tmtx_input.pedestal))
 
     tmtx._tm = mygs
     coil_names  = pyconvert(Vector{String}, mygs.coil_sets)
     coil_bounds = pydict(Dict(name => [-50.0e6, 50.0e6] for name in coil_names))
     tmtx.set_TokaMaker_coil_reg(coil_bounds=coil_bounds, updownsym=false)
 
-    tmtx.set_Ip(pydict(Dict(t0 => inp.Ip)))
-    tmtx.set_plasma_composition(; (Symbol(k) => v for (k, v) in inp.plasma_composition)...)
+    tmtx.set_Ip(pydict(Dict(t0 => tmtx_input.Ip)))
+    tmtx.set_plasma_composition(; (Symbol(k) => v for (k, v) in tmtx_input.plasma_composition)...)
     tmtx.set_evolve(density=true, Ti=true, Te=true, current=true)
 
     tmtx.set_diverted_shape_targets(
-        diverted_times=(0.0, inp.t_final),
-        x_point_targets=inp.x_points,
+        diverted_times=(0.0, tmtx_input.t_final),
+        x_point_targets=tmtx_input.x_points,
         x_point_weight=100,
     )
 
@@ -242,15 +242,15 @@ relaxes them via TORAX's time-dependent solver, and re-solves TokaMaker
 each loop, but since the equilibrium (g_eqdsk_arr) doesn't vary in time
 there's no genuine time evolution -- just convergence to a stationary state.
 """
-function run_tmtx_steady_state!(tmtx::Py, inp::TMTXInput; verbose::Bool=false)
+function run_tmtx_steady_state!(tmtx::Py, tmtx_input::TMTXInput; verbose::Bool=false)
     _patch_torax_progress_bar!()
     quietly(; verbose) do
         tmtx.fly(
             run_name="tmtx_seed",
-            max_loop=inp.max_loop,
+            max_loop=tmtx_input.max_loop,
             output_mode="normal",
             t_ave_toggle="on",
-            t_ave_window=inp.t_ave_window,
+            t_ave_window=tmtx_input.t_ave_window,
             steady_state_mode=true,
         )
     end
@@ -321,8 +321,8 @@ from its own native rho grid, via `_profile_on_psi_out`), Psi/Jphi/Ip_target
 come from the re-solved TokaMaker object -- mirroring the extraction at the
 end of `setup_tokamaker_from_file!`.
 """
-function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equilibrium, tmtx::Py, mygs::Py, inp::TMTXInput)
-    kin_nr = something(inp.kin_nr, length(inp.psi_sample))
+function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equilibrium, tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
+    kin_nr = something(tmtx_input.kin_nr, length(tmtx_input.psi_sample))
 
     dt = tmtx._data_tree
     psi_out = collect(range(0.0, 1.0; length=kin_nr))
@@ -373,16 +373,20 @@ profiles/equilibrium into `profiles`/`equilibrium` so the existing
 coarse-bracketing scan (DriveTokaMaker.jl) can pick up unchanged. Returns
 the re-solved TokaMaker instance for `tokamaker_run`/`coarse_scan`.
 """
-function setup_from_tmtx!(::Val{:D3D}, profiles::Profiles, equilibrium::Equilibrium, inp::TMTXInput, myOFT::Py; verbose::Bool=false)
-    mygs, _eqdsk = build_seed_tokamaker(inp, myOFT)
-    tmtx = build_tmtx(inp, mygs)
-    configure_tmtx!(tmtx, mygs, inp)
-    run_tmtx_steady_state!(tmtx, inp; verbose)
-    extract_profiles_and_equilibrium!(profiles, equilibrium, tmtx, mygs, inp)
+function setup_from_tmtx!(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py; verbose::Bool=false)
+    profiles = Profiles(Ti=nothing, Te=nothing, ni=nothing, ne=nothing,
+    pressure=nothing, pprime=nothing)
+    equilibrium = Equilibrium(Psi=nothing, Jphi=nothing, Ip_target=nothing)
+    
+    mygs, _eqdsk = build_seed_tokamaker(tmtx_input, myOFT)
+    tmtx = build_tmtx(tmtx_input, mygs)
+    configure_tmtx!(tmtx, mygs, tmtx_input)
+    run_tmtx_steady_state!(tmtx, tmtx_input; verbose)
+    extract_profiles_and_equilibrium!(profiles, equilibrium, tmtx, mygs, tmtx_input)
 
-    return mygs
+    return mygs, profiles, equilibrium
 end
 
-function setup_from_tmtx!(device::Symbol, profiles::Profiles, equilibrium::Equilibrium, inp::TMTXInput, myOFT::Py; verbose::Bool=false)
-    return setup_from_tmtx!(Val(device), profiles, equilibrium, inp, myOFT; verbose)
+function setup_from_tmtx!(device::Symbol, tmtx_input::TMTXInput, myOFT::Py; verbose::Bool=false)
+    return setup_from_tmtx!(Val(device), tmtx_input, myOFT; verbose)
 end
