@@ -155,20 +155,45 @@ end
 
 # in the future could add setup_tokamaker_from_file(::Val{:ITER})
 
-# function mtanh_pedestal_profile(rho::Vector{<:Real}, pedestal_top::Real, foot::Real, core_slope::Real, knee::Real, half_width::Real, blend::Real)
-#     t_inner = tanh((knee - rho[1]) / half_width)
-#     t_foot = tanh((knee - 1.0) / half_width)
-#     A = (pedestal_top - foot) / (t_inner - t_foot)
-#     B = foot - A * t_foot 
-#     ped = A * tanh((knee - rho) / half_width) + B 
-#     core_line = pedestal_top + core_slope * (rho .- rho[1])
-#     w = 1.0 / (1.0 + exp(-(rho - knee) / blend)) 
-#     return (1.0 - w) * core_line + w*ped 
-# end
+"""
+    mtanh_pedestal_profile(rho, ped_top, foot, core_slope, knee, hwid, blend)
 
-function tanh_pedestal_profile(psi::AbstractVector{<:Real}, core::Real, edge::Real,
-                                psi_ped::Real=0.9, width::Real=0.05)
-    return @. edge + (core - edge) * 0.5 * (1 - tanh((psi - psi_ped) / width))
+Julia port of `pulse_design.py`'s `_mtanh_pedestal` -- a linear core gradient
+smoothly blended into a tanh pedestal, richer than `tanh_pedestal_profile`'s
+plain symmetric tanh (it imposes an explicit core gradient and a distinct
+pedestal foot/width, matching TORAX's own MTANH pedestal shape rather than an
+ad-hoc guess). Kept as a pure-Julia reimplementation rather than calling the
+Python original directly: `_mtanh_pedestal` is a private (underscore-prefixed)
+function, not public API, and this session has already hit multiple breakages
+from depending on OFT/TORAX internals that changed silently across updates
+(`torax.run_simulation`'s call path, `set_x_points`). This is a small,
+self-contained formula with no external state, so reimplementing it removes
+that fragility entirely.
+
+A line of slope `core_slope` through (rho[1], `ped_top`) owns the core; a tanh
+dropping from `ped_top` to `foot` owns the edge; a sigmoid (centered at `knee`,
+width `blend`) hands off between them. The tanh is pinned exactly to `foot` at
+rho=1 and `ped_top` at the inner (first) `rho` point, regardless of `hwid`, so
+`hwid`/`knee` can be tuned freely without lifting the foot off the edge value.
+
+@param rho Normalized rho/psi array (ascending, ending at 1.0).
+@param ped_top Value at the inner (first) `rho` point.
+@param foot Separatrix value at rho=1.
+@param core_slope d(value)/d(rho) imposed at the inner edge.
+@param knee rho where the core hands off to the pedestal.
+@param hwid Pedestal (tanh) half-width.
+@param blend Sharpness of the core->pedestal handoff.
+"""
+function mtanh_pedestal_profile(rho::AbstractVector{<:Real}, ped_top::Real, foot::Real,
+                                 core_slope::Real, knee::Real, hwid::Real, blend::Real)
+    t_inner = tanh((knee - rho[1]) / hwid)
+    t_foot = tanh((knee - 1.0) / hwid)
+    A = (ped_top - foot) / (t_inner - t_foot)
+    B = foot - A * t_foot
+    ped = @. A * tanh((knee - rho) / hwid) + B
+    core_line = @. ped_top + core_slope * (rho - rho[1])
+    w = @. 1.0 / (1.0 + exp(-(rho - knee) / blend))
+    return @. (1.0 - w) * core_line + w * ped
 end
 
 function np_gradient(f::AbstractVector{<:Real}) # replace this later with native Julia gradient 
