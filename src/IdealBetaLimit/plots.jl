@@ -13,7 +13,7 @@ profile snapshot fields `evaluate_factor` attaches to every result row
 function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :ne, :pressure))
     sorted = sort(collect(results); by=r -> r.fraction)
     panels = [begin
-        p = plot(xlabel="psi", ylabel=String(q), legend=:outertopright)
+        p = plot(xlabel="psi", ylabel=String(q), legend=:topright, leftmargin=10Plots.mm)
         for r in sorted
             plot!(p, r.psi, getfield(r, q); label="f=$(round(r.fraction; digits=3))")
         end
@@ -33,7 +33,7 @@ equilibrium).
 """
 function plot_q_profile(results::AbstractVector)
     sorted = sort(collect(results); by=r -> r.fraction)
-    p = plot(xlabel="psi", ylabel="q", title="Safety factor profile", legend=:outertopright)
+    p = plot(xlabel="psi", ylabel="q", title="Safety factor profile", legend=:topright, leftmargin=8Plots.mm)
     for r in sorted
         plot!(p, r.psi_q, r.q_profile; label="f=$(round(r.fraction; digits=3))")
     end
@@ -101,7 +101,7 @@ function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
 
     p = plot(fraction, dW; seriestype=:scatter, markersize=6, label="scanned points",
              xlabel="fraction", ylabel="dW_total", title="Ideal-MHD beta limit scan",
-             legend=:topright)
+             legend=:topright, leftmargin=8Plots.mm)
     plot!(p, fraction, dW; label=nothing, color=:steelblue, linewidth=1)
     for (f, w, b) in zip(fraction, dW, beta_n)
         annotate!(p, f, w, text("  beta_N=$(round(b; digits=2))", 8, :left))
