@@ -21,6 +21,19 @@ see `evaluate_factor`'s docstring for what that costs you (no `plot_equilibrium`
 afterward). Pass a real path to persist every fraction's gEQDSK/GPEC outputs
 under it instead, as before.
 
+`mygs`'s poloidal flux is snapshotted once (`mygs.get_psi(normalized=false)`)
+before the loop starts, and restored (`mygs.set_psi(...; update_bounds=true)`)
+before every single fraction -- unconditionally, not just after a failure.
+This is deliberate, not just a performance/UX tradeoff: near an actual
+stability boundary (exactly what this scan is hunting for), a converged
+solve's warm start can bias which equilibrium branch the solver lands on,
+and a *failed* solve (`Exceeded maxits`) leaves `mygs`'s psi mid-iteration,
+which previously got inherited by -- and could cascade failures into -- the
+next fraction. Every fraction now gets an equally fair, independent solve
+from the same baseline. The cost is real: this gives up whatever speed/
+robustness benefit warm-starting from the previous (nearby) fraction would
+have provided, so every fraction is now roughly as expensive as the first.
+
 Both stages must stay sequential:
 - TokaMaker solves mutate the single `mygs` instance in place, so they can't be
   reordered or overlapped.
@@ -38,9 +51,11 @@ Both stages must stay sequential:
 """
 function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles,
                       gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing, verbose::Bool = false)
+    psi_baseline = mygs.get_psi(normalized=false)
     coarse_scan_results = []
     for fraction in fractions
         try
+            mygs.set_psi(psi_baseline, update_bounds=true)
             result = evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
             push!(coarse_scan_results, result)
         catch e
@@ -154,18 +169,27 @@ context (matching the shape of a typical hand-picked reference scan).
 or not each one converges), in case `dW_total` never goes negative (e.g.
 `start_fraction`/`step` too small/large for this equilibrium) -- a warning
 is issued rather than looping forever.
+
+`mygs`'s poloidal flux is snapshotted once before the loop and restored
+before every single fraction, unconditionally -- see `coarse_scan`'s
+docstring for why (branch-selection risk near the stability boundary this
+scan is hunting for, and to stop a failed solve's psi from cascading into
+the next fraction). Every fraction is now roughly as expensive as the first;
+there's no more warm-start speed benefit from one fraction to the next.
 """
 function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, equilibrium::Equilibrium, profiles::Profiles,
                                      gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing,
                                      extra_past_crossing::Int=1, max_fractions::Int=8, verbose::Bool=false)
     step > 0 || error("coarse_scan_until_unstable: step must be positive (ascending scan)")
 
+    psi_baseline = mygs.get_psi(normalized=false)
     results = []
     crossed_at = nothing
     fraction = start_fraction
     attempts = 0
     while attempts < max_fractions
         attempts += 1
+        mygs.set_psi(psi_baseline, update_bounds=true)
         result = try
             evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
         catch e
