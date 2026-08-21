@@ -16,8 +16,6 @@ initial-guess kinetic profiles at t=0 (shape doesn't matter much, TORAX
 relaxes them -- see the ITER notebook's Â§1.7 "Initial kinetic profiles").
 """
 Base.@kwdef mutable struct TMTXInput
-    oft_root::String
-    mesh_file::String
     seed_geqdsk::String
     Ip::Float64                                  # A, flattop target current
     x_points::Matrix{Float64}                    # Nx2, [[R,Z], ...]
@@ -86,27 +84,34 @@ function make_oft_env(oft_root::String; nthreads::Int=2)
 end
 
 """
-    build_seed_tokamaker(inp, myOFT) -> (mygs::Py, eqdsk::Py)
+    build_seed_tokamaker(::Val{:D3D}, inp, myOFT) -> (mygs::Py, eqdsk::Py)
 
-Loads the D3D mesh and builds a fresh TokaMaker object (against the given,
-already-constructed `myOFT` -- see `make_oft_env`) at the seed eqdsk's F0,
-mirroring the mesh/setup portion of `setup_tokamaker_from_file!` (utils.jl)
-and cell 1.4 of the ITER notebook. Does NOT solve an equilibrium here --
-TokaMaker_TORAX drives the solve itself once `fly()` is called.
+Loads the D3D mesh (`cases/D3D/DIIID_mesh.h5`, resolved automatically --
+not something you pass in, see `TMTXInput`'s docstring) and builds a fresh
+TokaMaker object (against the given, already-constructed `myOFT` -- see
+`make_oft_env`) at the seed eqdsk's F0, mirroring the mesh/setup portion of
+`setup_tokamaker_from_file!` (utils.jl) and cell 1.4 of the ITER notebook.
+Does NOT solve an equilibrium here -- TokaMaker_TORAX drives the solve
+itself once `fly()` is called.
+
+To add a new device (e.g. ITER), add a
+`build_seed_tokamaker(::Val{:ITER}, inp, myOFT)` method pointing at its own
+mesh file, same pattern as `setup_tokamaker_from_file!` in utils.jl.
 """
-function build_seed_tokamaker(tmtx_input::TMTXInput, myOFT::Py)
-    _ensure_oft_on_path!(tmtx_input.oft_root)
-
+function build_seed_tokamaker(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py)
     TokaMaker = pyimport("OpenFUSIONToolkit.TokaMaker").TokaMaker
     meshing   = pyimport("OpenFUSIONToolkit.TokaMaker.meshing")
     util      = pyimport("OpenFUSIONToolkit.TokaMaker.util")
+
+    d3d_case_dir = joinpath(pkgdir(TokToxStability), "cases", "D3D")
+    mesh_file = joinpath(d3d_case_dir, "DIIID_mesh.h5")
 
     eqdsk = util.read_eqdsk(tmtx_input.seed_geqdsk)
 
     mygs  = TokaMaker(myOFT)
     mygs.settings.maxits = 200
 
-    mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = meshing.load_gs_mesh(tmtx_input.mesh_file)
+    mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = meshing.load_gs_mesh(mesh_file)
     mygs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
     mygs.setup_regions(cond_dict=cond_dict, coil_dict=coil_dict)
 
@@ -115,6 +120,10 @@ function build_seed_tokamaker(tmtx_input::TMTXInput, myOFT::Py)
     mygs.setup(order=2, F0=abs(rcentr * bcentr))
 
     return mygs, eqdsk
+end
+
+function build_seed_tokamaker(device::Symbol, tmtx_input::TMTXInput, myOFT::Py)
+    return build_seed_tokamaker(Val(device), tmtx_input, myOFT)
 end
 
 """
@@ -378,7 +387,7 @@ function setup_from_tmtx!(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py; verbose
     pressure=nothing, pprime=nothing)
     equilibrium = Equilibrium(Psi=nothing, Jphi=nothing, Ip_target=nothing)
     
-    mygs, _eqdsk = build_seed_tokamaker(tmtx_input, myOFT)
+    mygs, _eqdsk = build_seed_tokamaker(Val(:D3D), tmtx_input, myOFT)
     tmtx = build_tmtx(tmtx_input, mygs)
     configure_tmtx!(tmtx, mygs, tmtx_input)
     run_tmtx_steady_state!(tmtx, tmtx_input; verbose)
