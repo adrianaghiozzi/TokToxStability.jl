@@ -112,10 +112,10 @@ function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
 
     p = plot(fraction, dW; seriestype=:scatter, markersize=6, label="scanned points",
              xlabel="fraction", ylabel="dW_total", title="Ideal-MHD beta limit scan",
-             legend=:topright, leftmargin=8Plots.mm)
+             legend=:bottomleft, leftmargin=8Plots.mm, rightmargin=20Plots.mm)
     plot!(p, fraction, dW; label=nothing, color=:steelblue, linewidth=1)
     for (f, w, b) in zip(fraction, dW, beta_n)
-        annotate!(p, f, w, text("  beta_N=$(round(b; digits=2))", 8, :left))
+        annotate!(p, f, w, text("  β_N=$(round(b; digits=2))", 8, :left))
     end
     hline!(p, [0.0]; label="dW_total = 0", color=:black, linestyle=:dot)
 
