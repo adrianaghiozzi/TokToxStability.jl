@@ -51,8 +51,19 @@ Plots flux-surface contours (psi(R,Z)) for a single `coarse_scan`/
 of the TORAX/TokaMaker toolchain, and already used elsewhere in this package
 for COCOS handling -- to parse the file, rather than reimplementing a gEQDSK
 reader in Julia.
+
+Requires `result.geqdsk_path !== nothing` -- i.e. the scan that produced
+`result` must have been run with an explicit `working_directory` (not the
+default ephemeral-temp-dir mode), since otherwise the gEQDSK this would read
+was already deleted right after GPEC ran on it.
 """
 function plot_equilibrium(result; nlevels::Int=25)
+    result.geqdsk_path === nothing && error(
+        "plot_equilibrium: this result has no saved gEQDSK to read (geqdsk_path === nothing) -- " *
+        "it came from a scan run with working_directory=nothing (the default), which deletes each " *
+        "fraction's files right after GPEC runs. Rerun the scan with an explicit `working_directory` " *
+        "to keep the files this needs."
+    )
     eqdsk_mod = pyimport("eqdsk")
     inst = eqdsk_mod.EQDSKInterface.from_file(result.geqdsk_path; to_cocos=nothing, no_cocos=true)
 

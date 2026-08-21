@@ -5,10 +5,21 @@ using Printf
 default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "p")
 
 """
-    coarse_scan(mygs, fractions, equilibrium, profiles, toroidal_mode_number, wall, kinetic, working_directory; verbose=false)
+    coarse_scan(mygs, fractions, equilibrium, profiles, gpec_settings::GPECSettings;
+                working_directory=nothing, verbose=false)
 
 Runs the TokaMaker equilibrium solve for each fraction, then the GPEC stability
 solve for each resulting equilibrium, sequentially.
+
+`gpec_settings` is a `GPECSettings` you build and configure yourself (toroidal
+mode number, wall, kinetic settings) -- see its docstring. It's read, never
+mutated -- see `evaluate_factor`.
+
+`working_directory`: `nothing` (default) runs each fraction in its own
+temporary directory, deleted right after that fraction's GPEC call returns --
+see `evaluate_factor`'s docstring for what that costs you (no `plot_equilibrium`
+afterward). Pass a real path to persist every fraction's gEQDSK/GPEC outputs
+under it instead, as before.
 
 Both stages must stay sequential:
 - TokaMaker solves mutate the single `mygs` instance in place, so they can't be
@@ -25,11 +36,12 @@ Both stages must stay sequential:
   would require separate OS processes (e.g. `Distributed.jl` workers), not
   Julia threads.
 """
-function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles, toroidal_mode_number, wall, kinetic, working_directory; verbose::Bool = false)
+function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles,
+                      gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing, verbose::Bool = false)
     coarse_scan_results = []
     for fraction in fractions
         try
-            result = evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
+            result = evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
             push!(coarse_scan_results, result)
         catch e
             println(e)
@@ -39,50 +51,86 @@ function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibri
     return coarse_scan_results
 end
 
-function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium, fraction::Real, toroidal_mode_number::Int,
-                          wall::Dict{String,<:Any}, kinetic::Dict{String,<:Any},
-                          working_directory::String; tag::Union{String,Nothing}=nothing,
-                          parallel_threads::Int=2, verbose::Bool=false)
+"""
+    evaluate_factor(mygs, profiles, equilibrium, fraction, gpec_settings::GPECSettings;
+                     working_directory=nothing, tag=nothing, verbose=false)
+
+Solves TokaMaker at `fraction`, writes its gEQDSK, then runs GPEC on it using
+the settings in `gpec_settings` (toroidal mode number, wall, kinetic) -- read
+only, never mutated (it holds no per-fraction state; see `GPECSettings`/
+`run_GPEC`).
+
+GPEC itself only knows how to read its equilibrium off disk (it's invoked by
+pointing it at a directory, not through an in-memory API), so *some* gEQDSK
+file always has to exist temporarily for it to read -- that part isn't
+optional. Whether that file (and GPEC's own output artifacts alongside it --
+F/G/K matrices, etc., since `mat_flag=true`) survives afterward is:
+
+- `working_directory = nothing` (default): runs in a fresh `mktempdir()`,
+  deleted in a `finally` block right after GPEC returns (even on error).
+  `geqdsk_path`/`run_dir` are `nothing` in the returned row, since the files
+  they'd point to no longer exist -- notably, `plots.jl`'s `plot_equilibrium`
+  won't work for a result row from this mode, since it has nothing left to
+  read back.
+- `working_directory = "some/path"`: unchanged from before -- writes to
+  `some/path/<tag>/`, kept after the call returns.
+"""
+function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium, fraction::Real, gpec_settings::GPECSettings;
+                          working_directory::Union{String,Nothing}=nothing, tag::Union{String,Nothing}=nothing, verbose::Bool=false)
     tag = something(tag, default_tag(fraction))
-    run_directory = joinpath(working_directory, tag)
+    ephemeral = working_directory === nothing
+    base_dir = ephemeral ? mktempdir() : working_directory
+    run_directory = joinpath(base_dir, tag)
 
-    nl_its, stats, beta_n, beta_t, l_i = quietly(; verbose) do
-        solve_at_pressure_factor(mygs, profiles, equilibrium, fraction)
+    try
+        nl_its, stats, beta_n, beta_t, l_i = quietly(; verbose) do
+            solve_at_pressure_factor(mygs, profiles, equilibrium, fraction)
+        end
+
+        # Full q(psi) profile at this fraction's converged equilibrium -- kept
+        # alongside the scalar q0/qmax (from GPEC, below) for per-iteration
+        # plotting (see plots.jl). `*_` absorbs any extra return values (e.g.
+        # flux-surface-averaged geometry terms) so this doesn't break if
+        # `get_q`'s return shape grows in a future TokaMaker version.
+        psi_q, q_profile, _ravgs, _rest... = pyconvert(Tuple, mygs.get_q(npsi=length(equilibrium.Psi), psi_pad=0.001))
+
+        geqdsk_path = write_geqdsk_for_gpec(mygs, run_directory, tag)
+
+        gpec_raw = quietly(; verbose) do
+            run_GPEC(gpec_settings, basename(geqdsk_path), run_directory)
+        end
+        gp = read_output(gpec_raw)
+
+        return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
+                p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
+                dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
+                run_dir=(ephemeral ? nothing : run_directory), geqdsk_path=(ephemeral ? nothing : geqdsk_path),
+                # Per-iteration profile/q snapshots for plots.jl. `psi` is the
+                # grid `profiles`/`equilibrium` are already sampled on (post
+                # rescale_profile!), so these all line up index-for-index.
+                psi=copy(equilibrium.Psi), Te=copy(profiles.Te), Ti=copy(profiles.Ti),
+                ne=copy(profiles.ne), pressure=copy(profiles.pressure),
+                psi_q=pyconvert(Vector{Float64}, psi_q), q_profile=pyconvert(Vector{Float64}, q_profile))
+    finally
+        ephemeral && rm(base_dir; recursive=true, force=true)
     end
-
-    # Full q(psi) profile at this fraction's converged equilibrium -- kept
-    # alongside the scalar q0/qmax (from GPEC, below) for per-iteration
-    # plotting (see plots.jl). `*_` absorbs any extra return values (e.g.
-    # flux-surface-averaged geometry terms) so this doesn't break if
-    # `get_q`'s return shape grows in a future TokaMaker version.
-    psi_q, q_profile, _ravgs, _rest... = pyconvert(Tuple, mygs.get_q(npsi=length(equilibrium.Psi), psi_pad=0.001))
-
-    geqdsk_path = write_geqdsk_for_gpec(mygs, run_directory, tag)
-    equilibrium_filename = basename(geqdsk_path)
-
-    gi = GPECInput(equilibrium_filename=equilibrium_filename, toroidal_mode_number=toroidal_mode_number, wall=wall,
-                    kinetic=kinetic, parallel_threads=parallel_threads)
-    gpec_raw = quietly(; verbose) do
-        run_GPEC(gi, run_directory)
-    end
-    gp = read_output(gpec_raw)
-
-    return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
-            p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
-            dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
-            run_dir=run_directory, geqdsk_path=geqdsk_path,
-            # Per-iteration profile/q snapshots for plots.jl. `psi` is the
-            # grid `profiles`/`equilibrium` are already sampled on (post
-            # rescale_profile!), so these all line up index-for-index.
-            psi=copy(equilibrium.Psi), Te=copy(profiles.Te), Ti=copy(profiles.Ti),
-            ne=copy(profiles.ne), pressure=copy(profiles.pressure),
-            psi_q=pyconvert(Vector{Float64}, psi_q), q_profile=pyconvert(Vector{Float64}, q_profile))
 end
 
 """
     coarse_scan_until_unstable(mygs, start_fraction, step, equilibrium, profiles,
-                                toroidal_mode_number, wall, kinetic, working_directory;
-                                extra_past_crossing=1, max_fractions=8, verbose=false)
+                                gpec_settings::GPECSettings;
+                                working_directory=nothing, extra_past_crossing=1,
+                                max_fractions=8, verbose=false)
+
+`gpec_settings` is a `GPECSettings` you build and configure yourself (toroidal mode number,
+wall, kinetic settings) -- see its docstring. It's read, never mutated -- see
+`evaluate_factor`.
+
+`working_directory`: `nothing` (default) runs each fraction in its own
+temporary directory, deleted right after that fraction's GPEC call returns --
+see `evaluate_factor`'s docstring for what that costs you (no `plot_equilibrium`
+afterward). Pass a real path to persist every fraction's gEQDSK/GPEC outputs
+under it instead, as before.
 
 Runs `evaluate_factor` (TokaMaker + GPEC) sequentially in ascending pressure
 fraction, starting at `start_fraction` and incrementing by `step` each time,
@@ -108,8 +156,8 @@ or not each one converges), in case `dW_total` never goes negative (e.g.
 is issued rather than looping forever.
 """
 function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, equilibrium::Equilibrium, profiles::Profiles,
-                                     toroidal_mode_number, wall::Dict{String,<:Any}, kinetic::Dict{String,<:Any},
-                                     working_directory; extra_past_crossing::Int=1, max_fractions::Int=8, verbose::Bool=false)
+                                     gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing,
+                                     extra_past_crossing::Int=1, max_fractions::Int=8, verbose::Bool=false)
     step > 0 || error("coarse_scan_until_unstable: step must be positive (ascending scan)")
 
     results = []
@@ -119,7 +167,7 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
     while attempts < max_fractions
         attempts += 1
         result = try
-            evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, toroidal_mode_number, wall, kinetic, working_directory; verbose)
+            evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
         catch e
             println(e)
             nothing
