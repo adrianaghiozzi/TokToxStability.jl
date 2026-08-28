@@ -2,19 +2,6 @@ using PythonCall
 
 using PythonCall
 
-"""
-    TMTXInput
-
-Bundles everything needed to build and run a single time-independent
-(steady_state_mode) TokaMaker_TORAX solve, analogous to `GPECInput` in
-DriveGPEC.jl.
-
-`seed_geqdsk` is used as BOTH endpoints of `g_eqdsk_arr` (i.e. the
-equilibrium is held fixed over [0, t_final]) -- this is what makes the run
-time-independent. `psi_sample`/`ne_init`/`Te_init`/`Ti_init` are your
-initial-guess kinetic profiles at t=0 (shape doesn't matter much, TORAX
-relaxes them -- see the ITER notebook's Â§1.7 "Initial kinetic profiles").
-"""
 Base.@kwdef mutable struct TMTXInput
     seed_geqdsk::String
     Ip::Float64                                  # A, flattop target current
@@ -39,13 +26,6 @@ Base.@kwdef mutable struct TMTXInput
     last_surface_factor::Float64 = 0.995
 end
 
-"""
-    _ensure_oft_on_path!(oft_root)
-
-Same sys.path hygiene as the D3D-from-file path in utils.jl (avoid picking
-up a stray OpenFUSIONToolkit install elsewhere on the path). Factored out
-here so both setup paths can eventually share it.
-"""
 function _ensure_oft_on_path!(oft_root::String)
     @pyexec (OFT_ROOT=oft_root,) => """
     import sys, os
@@ -60,44 +40,12 @@ function _ensure_oft_on_path!(oft_root::String)
     return nothing
 end
 
-"""
-    make_oft_env(oft_root; nthreads=2) -> myOFT::Py
-
-Constructs the single `OFT_env` instance for this Python kernel/session.
-`OFT_env` is a hard process-wide singleton (OpenFUSIONToolkit raises
-`RuntimeError: Only one instance of OFT_env can be created per python
-kernel` on a second construction) -- since PythonCall embeds Python in the
-same process as this Julia session, that means one `OFT_env` per Julia
-session, not per case.
-
-Call this once per session and thread the returned `myOFT` through to
-`build_seed_tokamaker`/`setup_tokamaker_from_file!` for every case, instead
-of restarting the whole kernel between runs. `TokaMaker` objects themselves
-carry no such restriction (see `OpenFUSIONToolkit/TokaMaker/_core.py`'s
-plain `__init__`, vs `OFT_env`'s guarded `__new__`), so many `TokaMaker(myOFT)`
-instances can be built against the one shared environment.
-"""
 function make_oft_env(oft_root::String; nthreads::Int=2)
     _ensure_oft_on_path!(oft_root)
     oft_env_mod = pyimport("OpenFUSIONToolkit")
     return oft_env_mod.OFT_env(nthreads=nthreads)
 end
 
-"""
-    build_seed_tokamaker(::Val{:D3D}, inp, myOFT) -> (mygs::Py, eqdsk::Py)
-
-Loads the D3D mesh (`cases/D3D/DIIID_mesh.h5`, resolved automatically --
-not something you pass in, see `TMTXInput`'s docstring) and builds a fresh
-TokaMaker object (against the given, already-constructed `myOFT` -- see
-`make_oft_env`) at the seed eqdsk's F0, mirroring the mesh/setup portion of
-`setup_tokamaker_from_file!` (utils.jl) and cell 1.4 of the ITER notebook.
-Does NOT solve an equilibrium here -- TokaMaker_TORAX drives the solve
-itself once `fly()` is called.
-
-To add a new device (e.g. ITER), add a
-`build_seed_tokamaker(::Val{:ITER}, inp, myOFT)` method pointing at its own
-mesh file, same pattern as `setup_tokamaker_from_file!` in utils.jl.
-"""
 function build_seed_tokamaker(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py)
     TokaMaker = pyimport("OpenFUSIONToolkit.TokaMaker").TokaMaker
     meshing   = pyimport("OpenFUSIONToolkit.TokaMaker.meshing")
@@ -126,12 +74,6 @@ function build_seed_tokamaker(device::Symbol, tmtx_input::TMTXInput, myOFT::Py)
     return build_seed_tokamaker(Val(device), tmtx_input, myOFT)
 end
 
-"""
-    build_tmtx(inp, mygs) -> tmtx::Py
-
-Constructs the TokaMaker_TORAX object with the equilibrium pinned to the
-seed geqdsk at both ends of the window (time-independent).
-"""
 function build_tmtx(tmtx_input::TMTXInput, mygs::Py)
     pulse_design = pyimport("OpenFUSIONToolkit.TokaMaker.pulse_design")
     np           = pyimport("numpy")
@@ -151,13 +93,6 @@ function build_tmtx(tmtx_input::TMTXInput, mygs::Py)
     return tmtx
 end
 
-"""
-    configure_tmtx!(tmtx, mygs, inp) -> tmtx
-
-Applies the tmtx.set* calls (ITER notebook Â§1.7-1.8). Coil bounds are built
-generically from whatever coil sets the D3D mesh actually defines, rather
-than hardcoding ITER's CS/PF/VS naming convention.
-"""
 function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
     tmtx.set_TORAX_grid(grid_type="n_rho", grid=tmtx_input.torax_n_rho)
 
@@ -190,34 +125,6 @@ function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
     return tmtx
 end
 
-"""
-    _patch_torax_progress_bar!()
-
-Monkey-patches `torax.run_simulation` AND `torax._src.orchestration.run_loop.run_loop`
-so `progress_bar` is forced to `False` -- without touching TokaMaker's installed
-`pulse_design.py` at all, so this keeps working against an unmodified TokaMaker/TORAX
-install. A `tqdm` progress bar writes to stdout on every step; under IJulia's piped
-(non-TTY) stdout, that can fill the pipe buffer faster than it's drained and block the
-underlying `write()` syscall indefinitely -- this was observed directly: the whole
-process going idle (0% CPU, every thread parked, main thread stuck in
-`_io_TextIOWrapper_write`) rather than a slow or compiling simulation.
-
-Originally (pre TokaMaker+TORAX `#318`) `pulse_design.py`'s `_run_tx()` called the
-public `torax.run_simulation(myconfig, log_timestep_info=False)`, leaving
-`progress_bar` at TORAX's own default (`True`); patching that one entry point (via
-`kwargs.setdefault`) was enough. `#318` rewired the internal call path to
-`torax._src.orchestration.run_loop.run_loop(..., progress_bar=True)` directly -- a
-private module `pulse_design.py` now calls instead of the public API, with
-`progress_bar=True` passed as an explicit literal at the call site (not a default),
-so the old patch became silent dead code and no longer intercepts anything. This
-second patch targets that actual call site, force-overriding `progress_bar` to
-`False` unconditionally (a plain assignment, not `setdefault`, since the caller always
-passes it explicitly) rather than relying on it being left at some default.
-
-Idempotent (checks a marker attribute before wrapping each target), so it's safe to
-call on every `run_tmtx_steady_state!` invocation, and safe to keep both patches
-regardless of which internal path a given TokaMaker/TORAX version actually uses.
-"""
 function _patch_torax_progress_bar!()
     @pyexec """
     import torax
@@ -243,14 +150,6 @@ function _patch_torax_progress_bar!()
     return nothing
 end
 
-"""
-    run_tmtx_steady_state!(tmtx, inp; verbose=false) -> tmtx
-
-Runs `fly()` in steady_state_mode -- takes the initial-guess profiles,
-relaxes them via TORAX's time-dependent solver, and re-solves TokaMaker
-each loop, but since the equilibrium (g_eqdsk_arr) doesn't vary in time
-there's no genuine time evolution -- just convergence to a stationary state.
-"""
 function run_tmtx_steady_state!(tmtx::Py, tmtx_input::TMTXInput; verbose::Bool=false)
     _patch_torax_progress_bar!()
     quietly(; verbose) do
@@ -266,24 +165,6 @@ function run_tmtx_steady_state!(tmtx::Py, tmtx_input::TMTXInput; verbose::Bool=f
     return tmtx
 end
 
-"""
-    _psi_on_grid(dt, rho_dim, rho_vals) -> Vector{Float64}
-
-Best-effort extraction of TORAX's normalized poloidal flux at the final
-time, resampled onto the rho coordinate `rho_vals` (whose xarray dim name is
-`rho_dim`). TORAX doesn't put every profile on the same grid -- it packs
-each output variable's dim (`rho_norm`, `rho_face_norm`, or
-`rho_cell_norm`) by matching array length at write time, so e.g. `psi_norm`
-lives on the N+1-point face grid while `n_e`/`T_e`/`T_i` may live on a
-different, shorter cell grid. Resolving psi generically against whichever
-grid the caller's profile is actually on (rather than assuming they match)
-avoids both a hard length-mismatch crash in `np.interp` and, more subtly,
-misaligning psi[j] with profile[j] when the lengths happen to coincide.
-
-NOT independently verified against a live TORAX session -- if this raises,
-run `list(tmtx._data_tree.profiles.data_vars)` in Python and swap in
-whatever the psi variable is actually called there.
-"""
 function _psi_on_grid(dt::Py, rho_dim::String, rho_vals::Vector{Float64})
     np = pyimport("numpy")
     for name in ("psi_norm", "psi_hat", "psi")
@@ -304,13 +185,6 @@ function _psi_on_grid(dt::Py, rho_dim::String, rho_vals::Vector{Float64})
           "and update `_psi_on_grid` in DriveTokTox.jl with the correct name.")
 end
 
-"""
-    _profile_on_psi_out(dt, varname, psi_out) -> Vector{Float64}
-
-Extracts `dt.profiles.<varname>` at the final time and resamples it onto
-`psi_out`, using psi resampled onto THIS variable's own rho grid (see
-`_psi_on_grid`) rather than a single psi array assumed to fit every profile.
-"""
 function _profile_on_psi_out(dt::Py, varname::String, psi_out::Vector{Float64})
     np = pyimport("numpy")
     da = getproperty(dt.profiles, varname).isel(time=-1)
@@ -321,15 +195,6 @@ function _profile_on_psi_out(dt::Py, varname::String, psi_out::Vector{Float64})
     return np.interp(psi_out, psi_at_grid, values) |> x -> pyconvert(Vector{Float64}, x)
 end
 
-"""
-    extract_profiles_and_equilibrium!(profiles, equilibrium, tmtx, mygs)
-
-Writes the converged steady-state solution into the shared `Profiles`/
-`Equilibrium` objects: Ti/Te/ni/ne/pressure come from TORAX (each resampled
-from its own native rho grid, via `_profile_on_psi_out`), Psi/Jphi/Ip_target
-come from the re-solved TokaMaker object -- mirroring the extraction at the
-end of `setup_tokamaker_from_file!`.
-"""
 function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equilibrium, tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
     kin_nr = something(tmtx_input.kin_nr, length(tmtx_input.psi_sample))
 
@@ -371,17 +236,6 @@ function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equi
     return nothing
 end
 
-"""
-    setup_from_tmtx!(::Val{:D3D}, profiles, equilibrium, inp::TMTXInput, myOFT::Py; verbose=false) -> mygs::Py
-
-Runs the full time-independent TMTX pipeline: build the seed TokaMaker
-object from the existing D3D mesh/eqdsk (against the given, already-built
-`myOFT` -- see `make_oft_env`), construct and configure the TokaMaker_TORAX
-object, solve once in steady_state_mode, then write the converged
-profiles/equilibrium into `profiles`/`equilibrium` so the existing
-coarse-bracketing scan (DriveTokaMaker.jl) can pick up unchanged. Returns
-the re-solved TokaMaker instance for `tokamaker_run`/`coarse_scan`.
-"""
 function setup_from_tmtx!(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py; verbose::Bool=false)
     profiles = Profiles(Ti=nothing, Te=nothing, ni=nothing, ne=nothing,
     pressure=nothing, pprime=nothing)

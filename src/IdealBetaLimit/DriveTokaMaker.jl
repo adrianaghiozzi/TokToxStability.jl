@@ -4,51 +4,6 @@ using Printf
 
 default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "p")
 
-"""
-    coarse_scan(mygs, fractions, equilibrium, profiles, gpec_settings::GPECSettings;
-                working_directory=nothing, verbose=false)
-
-Runs the TokaMaker equilibrium solve for each fraction, then the GPEC stability
-solve for each resulting equilibrium, sequentially.
-
-`gpec_settings` is a `GPECSettings` you build and configure yourself (toroidal
-mode number, wall, kinetic settings) -- see its docstring. It's read, never
-mutated -- see `evaluate_factor`.
-
-`working_directory`: `nothing` (default) runs each fraction in its own
-temporary directory, deleted right after that fraction's GPEC call returns --
-see `evaluate_factor`'s docstring for what that costs you (no `plot_equilibrium`
-afterward). Pass a real path to persist every fraction's gEQDSK/GPEC outputs
-under it instead, as before.
-
-`mygs`'s poloidal flux is snapshotted once (`mygs.get_psi(normalized=false)`)
-before the loop starts, and restored (`mygs.set_psi(...; update_bounds=true)`)
-before every single fraction -- unconditionally, not just after a failure.
-This is deliberate, not just a performance/UX tradeoff: near an actual
-stability boundary (exactly what this scan is hunting for), a converged
-solve's warm start can bias which equilibrium branch the solver lands on,
-and a *failed* solve (`Exceeded maxits`) leaves `mygs`'s psi mid-iteration,
-which previously got inherited by -- and could cascade failures into -- the
-next fraction. Every fraction now gets an equally fair, independent solve
-from the same baseline. The cost is real: this gives up whatever speed/
-robustness benefit warm-starting from the previous (nearby) fraction would
-have provided, so every fraction is now roughly as expensive as the first.
-
-Both stages must stay sequential:
-- TokaMaker solves mutate the single `mygs` instance in place, so they can't be
-  reordered or overlapped.
-- GPEC itself uses `Threads.@threads :static` extensively in its own hot loops
-  (flux-surface reconstruction, ballooning/Mercier scans, vacuum kernels, ...),
-  completely independent of the `parallel_threads`/`use_parallel` toml knobs
-  (those only gate the inner Delta' BVP path). Julia's `:static` schedule
-  cannot be nested or run concurrently across tasks/threads, so calling
-  `run_GPEC` from more than one task at a time throws
-  `"@threads :static cannot be used concurrently or nested"`. A single GPEC
-  run already uses every thread the process has (`-t auto`/`-t N`); that's the
-  available parallelism here. Running multiple fractions' GPEC solves at once
-  would require separate OS processes (e.g. `Distributed.jl` workers), not
-  Julia threads.
-"""
 function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles,
                       gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing, verbose::Bool = false)
     psi_baseline = mygs.get_psi(normalized=false)
@@ -66,30 +21,6 @@ function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibri
     return coarse_scan_results
 end
 
-"""
-    evaluate_factor(mygs, profiles, equilibrium, fraction, gpec_settings::GPECSettings;
-                     working_directory=nothing, tag=nothing, verbose=false)
-
-Solves TokaMaker at `fraction`, writes its gEQDSK, then runs GPEC on it using
-the settings in `gpec_settings` (toroidal mode number, wall, kinetic) -- read
-only, never mutated (it holds no per-fraction state; see `GPECSettings`/
-`run_GPEC`).
-
-GPEC itself only knows how to read its equilibrium off disk (it's invoked by
-pointing it at a directory, not through an in-memory API), so *some* gEQDSK
-file always has to exist temporarily for it to read -- that part isn't
-optional. Whether that file (and GPEC's own output artifacts alongside it --
-F/G/K matrices, etc., since `mat_flag=true`) survives afterward is:
-
-- `working_directory = nothing` (default): runs in a fresh `mktempdir()`,
-  deleted in a `finally` block right after GPEC returns (even on error).
-  `geqdsk_path`/`run_dir` are `nothing` in the returned row, since the files
-  they'd point to no longer exist -- notably, `plots.jl`'s `plot_equilibrium`
-  won't work for a result row from this mode, since it has nothing left to
-  read back.
-- `working_directory = "some/path"`: unchanged from before -- writes to
-  `some/path/<tag>/`, kept after the call returns.
-"""
 function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium, fraction::Real, gpec_settings::GPECSettings;
                           working_directory::Union{String,Nothing}=nothing, tag::Union{String,Nothing}=nothing, verbose::Bool=false)
     tag = something(tag, default_tag(fraction))
@@ -131,52 +62,6 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
     end
 end
 
-"""
-    coarse_scan_until_unstable(mygs, start_fraction, step, equilibrium, profiles,
-                                gpec_settings::GPECSettings;
-                                working_directory=nothing, extra_past_crossing=1,
-                                max_fractions=8, verbose=false)
-
-`gpec_settings` is a `GPECSettings` you build and configure yourself (toroidal mode number,
-wall, kinetic settings) -- see its docstring. It's read, never mutated -- see
-`evaluate_factor`.
-
-`working_directory`: `nothing` (default) runs each fraction in its own
-temporary directory, deleted right after that fraction's GPEC call returns --
-see `evaluate_factor`'s docstring for what that costs you (no `plot_equilibrium`
-afterward). Pass a real path to persist every fraction's gEQDSK/GPEC outputs
-under it instead, as before.
-
-Runs `evaluate_factor` (TokaMaker + GPEC) sequentially in ascending pressure
-fraction, starting at `start_fraction` and incrementing by `step` each time,
-stopping once GPEC's `dW_total` actually crosses from stable (>=0) to
-unstable (<0) -- the real ideal-MHD marginal-stability criterion. This
-replaces an earlier attempt to locate the crossing cheaply via TokaMaker's
-canonical `beta_N = 4*l_i` limit before ever calling GPEC: that limit is
-only a rough empirical operational guideline and was found (empirically, on
-a real case) to sit well above where GPEC's `dW_total` actually crosses
-zero for a given equilibrium/mode/wall, so using it to pick which fractions
-get a GPEC solve pointed the search at the wrong region of fraction space.
-This version checks the real quantity at every step instead, at the cost of
-spending GPEC time on every fraction visited (not just a pre-guessed few) --
-still cheaper than a long fixed sweep, since it stops as soon as the
-crossing is bracketed rather than running to a preset end fraction.
-
-Continues for `extra_past_crossing` fractions past the first negative
-`dW_total` so the returned scan brackets the crossing with a bit of slope
-context (matching the shape of a typical hand-picked reference scan).
-`max_fractions` is a hard cap on the number of fractions attempted (whether
-or not each one converges), in case `dW_total` never goes negative (e.g.
-`start_fraction`/`step` too small/large for this equilibrium) -- a warning
-is issued rather than looping forever.
-
-`mygs`'s poloidal flux is snapshotted once before the loop and restored
-before every single fraction, unconditionally -- see `coarse_scan`'s
-docstring for why (branch-selection risk near the stability boundary this
-scan is hunting for, and to stop a failed solve's psi from cascading into
-the next fraction). Every fraction is now roughly as expensive as the first;
-there's no more warm-start speed benefit from one fraction to the next.
-"""
 function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, equilibrium::Equilibrium, profiles::Profiles,
                                      gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing,
                                      extra_past_crossing::Int=1, max_fractions::Int=8, verbose::Bool=false)
@@ -215,16 +100,6 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
     return results
 end
 
-"""
-    _interp_zero_crossing(xs, ys) -> (crossing, lo, hi, bracketed::Bool)
-
-Generic zero-crossing helper shared by `estimate_beta_limit` (over
-`beta_n`/`dW_total`) and `plots.jl`'s `plot_beta_scan_summary` (over
-`fraction`/`dW_total`, to place the same estimated crossing on a
-fraction-space x-axis). See `estimate_beta_limit`'s docstring for the
-bracketed-vs-extrapolated behavior this implements; this just operates on
-plain vectors instead of `coarse_scan` result rows.
-"""
 function _interp_zero_crossing(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
     order = sortperm(xs)
     xs, ys = xs[order], ys[order]
@@ -250,32 +125,6 @@ function _interp_zero_crossing(xs::AbstractVector{<:Real}, ys::AbstractVector{<:
     return (crossing=crossing, lo=first(xs), hi=last(xs), bracketed=false)
 end
 
-"""
-    estimate_beta_limit(results; verbose=true) -> (beta_n_crossing, beta_n_lo, beta_n_hi, bracketed::Bool)
-
-Estimates the ideal-MHD marginal-stability beta_N limit (where `dW_total`
-crosses zero) from `results` -- the vector of NamedTuples returned by
-`coarse_scan`/`coarse_scan_until_unstable`, each expected to have `beta_n`
-and `dW_total` fields.
-
-If the scan actually BRACKETS a stable (`dW_total >= 0`) -> unstable
-(`dW_total < 0`) transition between two adjacent points (sorted by
-`beta_n`), `beta_n_crossing` is linearly interpolated strictly between
-those two points, and `beta_n_lo`/`beta_n_hi` are their exact, calculated
-beta_N values (`bracketed = true`) -- i.e. the real bounds the scan
-achieved, not an extrapolation.
-
-If no such transition is found (e.g. `coarse_scan_until_unstable` hit
-`max_fractions` while still stable everywhere, or the scan started already
-unstable), this issues a `@warn` and instead fits a straight line through
-ALL scanned (beta_n, dW_total) points -- ordinary least squares for 3+
-points, the exact two-point line for exactly 2 -- and extrapolates it to
-`dW_total = 0`. `beta_n_lo`/`beta_n_hi` in this case report the min/max
-beta_N actually scanned (NOT the crossing bounds), so the gap between them
-and `beta_n_crossing` shows how far the extrapolation reaches beyond real
-data. `bracketed = false` flags that `beta_n_crossing` here is a rough
-extrapolated guess, not a calculated bound.
-"""
 function estimate_beta_limit(results::AbstractVector; verbose::Bool=true)
     length(results) >= 2 || error("estimate_beta_limit needs at least 2 scanned points, got $(length(results))")
 
@@ -314,8 +163,8 @@ function tokamaker_run(mygs::Py, profiles::Profiles, equilibrium::Equilibrium; n
         psi_b0 = pyconvert(Float64, psi_bounds[0])
         psi_b1 = pyconvert(Float64, psi_bounds[1])
 
-        profiles.pprime = np_gradient(profiles.pressure) ./
-                           (np_gradient(equilibrium.Psi) .* (psi_b1 - psi_b0))
+        profiles.pprime = numpy_like_gradient(profiles.pressure) ./
+                           (numpy_like_gradient(equilibrium.Psi) .* (psi_b1 - psi_b0))
 
         mygs.set_targets(Ip=equilibrium.Ip_target, pax=profiles.pressure[1])
 
@@ -354,4 +203,94 @@ function write_geqdsk_for_gpec(mygs::Py, run_directory::String, tag, nr::Int=257
 
     mygs.save_eqdsk(out; nr=nr, nz=nz, truncate_eq=false, lcfs_pad=0.001)
     return out
+end
+
+function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
+    kin_nr = length(equilibrium.Psi)
+    d3d_case_dir = joinpath(pkgdir(TokToxStability), "cases", "D3D")
+    mesh_file = joinpath(d3d_case_dir, "DIIID_mesh.h5")
+    geqdsk_file = joinpath(d3d_case_dir, "g147131.02300_DIIID_KEFIT.eqdsk")
+
+    result = @pyexec (
+        OFT_ROOT=oft_root, MESH_FILE=mesh_file, GEQDSK_FILE=geqdsk_file,
+        psi_prof=equilibrium.Psi, kin_nr=kin_nr, myOFT=myOFT,
+    ) => """
+    import sys, os
+    import numpy as np
+
+    oft_py = os.path.join(OFT_ROOT, "python")
+    sys.path = [p for p in sys.path
+                if not (p and p != oft_py
+                        and os.path.isfile(os.path.join(p, "OpenFUSIONToolkit", "__init__.py")))]
+    sys.path.insert(0, oft_py)
+
+    import OpenFUSIONToolkit as _oft_pkg
+    assert _oft_pkg.__file__.startswith(OFT_ROOT), (
+        f"Wrong OpenFUSIONToolkit loaded: {_oft_pkg.__file__} (wanted {OFT_ROOT})")
+
+    from OpenFUSIONToolkit.TokaMaker import TokaMaker
+    from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
+    from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
+
+    eqdsk = read_eqdsk(GEQDSK_FILE)
+
+    mygs  = TokaMaker(myOFT)
+    mygs.settings.maxits = 200
+
+    mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = load_gs_mesh(MESH_FILE)
+    mygs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
+    mygs.setup_regions(cond_dict=cond_dict, coil_dict=coil_dict)
+    mygs.setup(order=2, F0=abs(eqdsk["rcentr"] * eqdsk["bcentr"]))
+
+    mygs.set_coil_vsc({"F9A": 1.0, "F9B": -1.0})
+
+    mygs.set_targets(Ip=abs(eqdsk["ip"]), pax=eqdsk["pres"][0])
+
+    isoflux_pts = eqdsk["rzout"].copy()
+    weights     = np.ones(isoflux_pts.shape[0]) * 50.0
+    mygs.set_isoflux(isoflux_pts, weights=weights)
+
+    coil_names = [
+        "ECOILA", "ECOILB",
+        "F1A", "F2A", "F3A", "F4A", "F5A", "F6A", "F7A", "F8A", "F9A",
+        "F1B", "F2B", "F3B", "F4B", "F5B", "F6B", "F7B", "F8B", "F9B",
+    ]
+    reg_terms = [mygs.coil_reg_term({c: 1.0}, target=0.0, weight=1.0) for c in coil_names]
+    reg_terms.append(mygs.coil_reg_term({"#VSC": 1.0}, target=0.0, weight=1.0e-2))
+    mygs.set_coil_reg(reg_terms=reg_terms)
+
+    ffprim  = eqdsk["ffprim"]
+    pprime0 = eqdsk["pprime"]
+    psi_eqdsk = np.linspace(0.0, 1.0, np.size(ffprim))
+
+    ffp_interp = np.interp(psi_prof, psi_eqdsk, ffprim)
+    pp_interp  = np.interp(psi_prof, psi_eqdsk, pprime0)
+
+    mygs.set_profiles(
+        ffp_prof={"type": "linterp", "y": ffp_interp, "x": psi_prof},
+        pp_prof ={"type": "linterp", "y": pp_interp,  "x": psi_prof},
+    )
+
+    mygs.init_psi(1.7, 0.0, 0.5, 1.3, -0.4)
+    mygs.solve()
+    mygs.print_info()
+
+    psi_tkmkr, f_bl, fp_bl, p_bl, pp_bl = mygs.get_profiles(npsi=kin_nr)
+    psi_q, q_bl, ravgs_bl, *_ = mygs.get_q(npsi=kin_nr, psi_pad=0.001)
+
+    mu0 = 4.0e-7 * np.pi
+    R_avg, oneOverR_avg = ravgs_bl['<R>'], ravgs_bl['<1/R>']
+    jphi_baseline = R_avg * pp_bl + oneOverR_avg * (f_bl * fp_bl) / mu0
+
+    ip_target = abs(eqdsk["ip"])
+    """ => (mygs, psi_tkmkr::Vector{Float64}, jphi_baseline::Vector{Float64}, ip_target::Float64)
+
+    equilibrium.Psi     = result.psi_tkmkr
+    equilibrium.Jphi = result.jphi_baseline
+    equilibrium.Ip_target     = result.ip_target
+    return result.mygs
+end
+
+function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
+    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium, myOFT; oft_root)
 end

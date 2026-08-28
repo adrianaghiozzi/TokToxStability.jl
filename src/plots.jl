@@ -1,15 +1,6 @@
 using Plots
 using PythonCall
 
-"""
-    plot_profiles(results; quantities=(:Te, :Ti, :ne, :pressure)) -> Plots.Plot
-
-Plots the requested profile quantities (each vs. `psi`) for every entry in
-`results` (the vector returned by `coarse_scan`/`coarse_scan_until_unstable`),
-one panel per quantity, one line per fraction. Relies on the per-iteration
-profile snapshot fields `evaluate_factor` attaches to every result row
-(`psi`, `Te`, `Ti`, `ne`, `pressure`).
-"""
 function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :ne, :pressure))
     sorted = sort(collect(results); by=r -> r.fraction)
     panels = [begin
@@ -22,15 +13,6 @@ function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :ne, :pres
     return plot(panels...; layout=(length(quantities), 1), size=(700, 300 * length(quantities)))
 end
 
-"""
-    plot_q_profile(results) -> Plots.Plot
-
-Plots the safety factor q(psi) for every entry in `results`, one line per
-fraction, with a horizontal reference line at q=1 (the m/n=1/1 rational
-surface). Relies on the `psi_q`/`q_profile` fields `evaluate_factor` attaches
-to every result row (from `mygs.get_q()` at that fraction's converged
-equilibrium).
-"""
 function plot_q_profile(results::AbstractVector)
     sorted = sort(collect(results); by=r -> r.fraction)
     p = plot(xlabel="psi", ylabel="q", title="Safety factor profile", legend=:topright, leftmargin=8Plots.mm)
@@ -41,29 +23,20 @@ function plot_q_profile(results::AbstractVector)
     return p
 end
 
-"""
-    plot_equilibrium(result; nlevels=25) -> Plots.Plot
-
-Plots flux-surface contours (psi(R,Z)) for a single `coarse_scan`/
-`coarse_scan_until_unstable` result row, read back from the gEQDSK saved at
-`result.geqdsk_path` (written by `write_geqdsk_for_gpec` during
-`evaluate_factor`). Uses the `eqdsk` Python package -- already a dependency
-of the TORAX/TokaMaker toolchain, and already used elsewhere in this package
-for COCOS handling -- to parse the file, rather than reimplementing a gEQDSK
-reader in Julia.
-
-Requires `result.geqdsk_path !== nothing` -- i.e. the scan that produced
-`result` must have been run with an explicit `working_directory` (not the
-default ephemeral-temp-dir mode), since otherwise the gEQDSK this would read
-was already deleted right after GPEC ran on it.
-"""
-function plot_equilibrium(result; nlevels::Int=25)
+function plot_equilibrium(result; nlevels::Int=25, python_site_packages::Union{Nothing,String}=nothing)
     result.geqdsk_path === nothing && error(
         "plot_equilibrium: this result has no saved gEQDSK to read (geqdsk_path === nothing) -- " *
         "it came from a scan run with working_directory=nothing (the default), which deletes each " *
         "fraction's files right after GPEC runs. Rerun the scan with an explicit `working_directory` " *
         "to keep the files this needs."
     )
+    if python_site_packages !== nothing
+        @pyexec (SITE_PACKAGES=python_site_packages,) => """
+        import sys
+        if SITE_PACKAGES not in sys.path:
+            sys.path.insert(0, SITE_PACKAGES)
+        """ => ()
+    end
     eqdsk_mod = pyimport("eqdsk")
     inst = eqdsk_mod.EQDSKInterface.from_file(result.geqdsk_path; to_cocos=nothing, no_cocos=true)
 
@@ -87,23 +60,6 @@ function plot_equilibrium(result; nlevels::Int=25)
     return p
 end
 
-"""
-    plot_beta_scan_summary(results; beta_limit=nothing) -> Plots.Plot
-
-Summary plot of a `coarse_scan`/`coarse_scan_until_unstable` run: `dW_total`
-vs. `fraction` (x-axis, as scanned), with a horizontal reference line at
-`dW_total=0` (the ideal-MHD marginal-stability threshold). Each scanned point
-is annotated with its `beta_N`, since that -- not `fraction` -- is the
-physically meaningful quantity.
-
-If `beta_limit` (the NamedTuple returned by `estimate_beta_limit`) is given,
-the estimated crossing is also marked: a vertical line at the fraction
-corresponding to `beta_limit.beta_n_crossing` (found via the same
-bracket-or-extrapolate procedure `estimate_beta_limit` uses, applied to
-`fraction` instead of `beta_n` -- see `_interp_zero_crossing`), solid if
-`beta_limit.bracketed` (a real, calculated bound) or dashed if not (an
-extrapolated guess), labeled with the corresponding beta_N value.
-"""
 function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
     sorted = sort(collect(results); by=r -> r.fraction)
     fraction = [r.fraction for r in sorted]
