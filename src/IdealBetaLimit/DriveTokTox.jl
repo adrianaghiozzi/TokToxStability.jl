@@ -3,7 +3,7 @@ using PythonCall
 using PythonCall
 
 Base.@kwdef mutable struct TMTXInput
-    seed_geqdsk::String
+    seed_geqdsk::String                          # path to a gEQDSK file seeding the coupled solve -- see `default_d3d_163303_seed_geqdsk()` for a ready-made D3D default
     Ip::Float64                                  # A, flattop target current
     x_points::Matrix{Float64}                    # Nx2, [[R,Z], ...]
     psi_sample::Vector{Float64}
@@ -26,24 +26,35 @@ Base.@kwdef mutable struct TMTXInput
     last_surface_factor::Float64 = 0.995
 end
 
-function _ensure_oft_on_path!(oft_root::String)
-    @pyexec (OFT_ROOT=oft_root,) => """
-    import sys, os
-    oft_py = os.path.join(OFT_ROOT, "python")
-    sys.path = [p for p in sys.path if p != oft_py]  # dedupe only, no destructive filtering
-    sys.path.insert(0, oft_py)
+"""
+    make_oft_env(; nthreads=2)
 
-    import OpenFUSIONToolkit as _oft_pkg
-    assert _oft_pkg.__file__.startswith(OFT_ROOT), (
-        f"Wrong OpenFUSIONToolkit loaded: {_oft_pkg.__file__} (wanted {OFT_ROOT})")
-    """ => ()
-    return nothing
-end
-
-function make_oft_env(oft_root::String; nthreads::Int=2)
-    _ensure_oft_on_path!(oft_root)
+Build the OFT environment used by every TokaMaker call in this package.
+`OpenFUSIONToolkit` is resolved the normal way (`pyimport`) -- see `CondaPkg.toml`
+for how it's pinned/installed. No local OFT checkout or path setup is required.
+"""
+function make_oft_env(; nthreads::Int=2)
     oft_env_mod = pyimport("OpenFUSIONToolkit")
     return oft_env_mod.OFT_env(nthreads=nthreads)
+end
+
+"""
+    default_d3d_163303_seed_geqdsk()
+
+Path to a packaged D3D seed gEQDSK, generated from shot 163303 (the standard DIII-D
+modeling reference discharge) at t=5.0s -- a clean flattop point (Ip steady at
+1.13-1.17 MA over t=4.8-6.7s). The equilibrium itself was solved from scratch (mesh,
+D3D coil set, isoflux/saddle/psi constraints, `init_psi` guess) using shape and target
+data pulled once via `FUSE.case_parameters(:D3D, 163303; omfit_host="omega.gat.com")`
++ `FUSE.init(ini, act)`, off `dd.equilibrium.time_slice[208]`; only the physically
+relevant (lower, on-boundary) X-point was used -- IMAS also reports a second null far
+outside the LCFS outline that isn't part of the actual diverted shape.
+
+Use as `TMTXInput(; seed_geqdsk=default_d3d_163303_seed_geqdsk(), <rest of your inputs>)`
+for a quick D3D run; pass a different gEQDSK path by hand for a different shot/scenario.
+"""
+function default_d3d_163303_seed_geqdsk()
+    return joinpath(pkgdir(TokToxStability), "cases", "D3D", "g163303.05000_DIIID_seed.eqdsk")
 end
 
 function build_seed_tokamaker(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py)
@@ -202,12 +213,9 @@ function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equi
     psi_out = collect(range(0.0, 1.0; length=kin_nr))
 
     ne = _profile_on_psi_out(dt, "n_e", psi_out)
+    ni = _profile_on_psi_out(dt, "n_i", psi_out)
     Te = _profile_on_psi_out(dt, "T_e", psi_out) .* 1e3  # keV -> eV
     Ti = _profile_on_psi_out(dt, "T_i", psi_out) .* 1e3  # keV -> eV
-    # TODO: if TORAX exposes n_i directly (dt.profiles.n_i) prefer that over
-    # assuming ni == ne; leaving as ne here mirrors the simplification pattern
-    # already visible elsewhere (single-ion-species D3D case).
-    ni = ne
     pressure = boltzmann_constant .* (ne .* Te .+ ni .* Ti)
 
     psi_tkmkr, f_bl, fp_bl, p_bl, pp_bl = mygs.get_profiles(npsi=kin_nr)

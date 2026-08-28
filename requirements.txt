@@ -1,0 +1,22 @@
+# Python runtime requirements for TokToxStability's TokaMaker/TORAX coupling.
+#
+# NOTE: OpenFUSIONToolkit is pinned to a DEVELOPMENT build published to TestPyPI,
+# not the stable release on the live PyPI -- this package's `set_diverted_shape_targets`
+# call (in DriveTokTox.jl) is newer than the latest stable release (26.6). Because a
+# .devN pre-release sorts *below* the final 26.6 in PEP 440, it must be installed with
+# TestPyPI as an index and the exact version pinned. Plain `pip install -r requirements.txt`
+# will NOT find it unless you add the TestPyPI index, e.g.:
+#
+#     pip install --pre \
+#         --index-url https://test.pypi.org/simple/ \
+#         --extra-index-url https://pypi.org/simple/ \
+#         -r requirements.txt
+#
+# Or just run ./setup_venv.sh, which does this for you.
+
+OpenFUSIONToolkit==26.6.dev16
+torax==1.4.*
+omfit_classes
+uncertainties
+h5py
+setuptools        # provides the distutils shim needed on Python >= 3.12

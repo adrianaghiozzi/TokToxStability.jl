@@ -4,20 +4,29 @@ using Printf
 
 default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "p")
 
+_is_tokamaker_solve_failure(e) = e isa ErrorException && startswith(e.msg, "TokaMaker did not converge")
+
 function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles,
                       gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing, verbose::Bool = false)
     psi_baseline = mygs.get_psi(normalized=false)
     coarse_scan_results = []
+    mygs_possibly_corrupted = false
     for fraction in fractions
         try
             mygs.set_psi(psi_baseline, update_bounds=true)
             result = evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
             push!(coarse_scan_results, result)
         catch e
+            _is_tokamaker_solve_failure(e) && (mygs_possibly_corrupted = true)
             println(e)
             continue
         end
     end
+    mygs_possibly_corrupted && @warn "coarse_scan: a TokaMaker solve failed to converge during this scan, " *
+                                      "leaving `mygs`'s internal solver state mid-iteration. Rebuild `mygs` " *
+                                      "(e.g. via `setup_from_tmtx!`/`setup_tokamaker_from_file!`) before running " *
+                                      "another scan on it -- reusing this `mygs` risks the failure cascading into " *
+                                      "future scans."
     return coarse_scan_results
 end
 
@@ -33,11 +42,6 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
             solve_at_pressure_factor(mygs, profiles, equilibrium, fraction)
         end
 
-        # Full q(psi) profile at this fraction's converged equilibrium -- kept
-        # alongside the scalar q0/qmax (from GPEC, below) for per-iteration
-        # plotting (see plots.jl). `*_` absorbs any extra return values (e.g.
-        # flux-surface-averaged geometry terms) so this doesn't break if
-        # `get_q`'s return shape grows in a future TokaMaker version.
         psi_q, q_profile, _ravgs, _rest... = pyconvert(Tuple, mygs.get_q(npsi=length(equilibrium.Psi), psi_pad=0.001))
 
         geqdsk_path = write_geqdsk_for_gpec(mygs, run_directory, tag)
@@ -72,12 +76,14 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
     crossed_at = nothing
     fraction = start_fraction
     attempts = 0
+    mygs_possibly_corrupted = false
     while attempts < max_fractions
         attempts += 1
         mygs.set_psi(psi_baseline, update_bounds=true)
         result = try
             evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
         catch e
+            _is_tokamaker_solve_failure(e) && (mygs_possibly_corrupted = true)
             println(e)
             nothing
         end
@@ -96,6 +102,12 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
     crossed_at === nothing && @warn "coarse_scan_until_unstable: dW_total never went negative within " *
                                      "max_fractions=$max_fractions (last fraction tried = $(fraction - step)) " *
                                      "-- results may not bracket the true beta limit"
+
+    mygs_possibly_corrupted && @warn "coarse_scan_until_unstable: a TokaMaker solve failed to converge during " *
+                                      "this scan, leaving `mygs`'s internal solver state mid-iteration. Rebuild " *
+                                      "`mygs` (e.g. via `setup_from_tmtx!`/`setup_tokamaker_from_file!`) before " *
+                                      "running another scan on it -- reusing this `mygs` risks the failure " *
+                                      "cascading into future scans."
 
     return results
 end
@@ -205,28 +217,17 @@ function write_geqdsk_for_gpec(mygs::Py, run_directory::String, tag, nr::Int=257
     return out
 end
 
-function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
+function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py)
     kin_nr = length(equilibrium.Psi)
     d3d_case_dir = joinpath(pkgdir(TokToxStability), "cases", "D3D")
     mesh_file = joinpath(d3d_case_dir, "DIIID_mesh.h5")
     geqdsk_file = joinpath(d3d_case_dir, "g147131.02300_DIIID_KEFIT.eqdsk")
 
     result = @pyexec (
-        OFT_ROOT=oft_root, MESH_FILE=mesh_file, GEQDSK_FILE=geqdsk_file,
+        MESH_FILE=mesh_file, GEQDSK_FILE=geqdsk_file,
         psi_prof=equilibrium.Psi, kin_nr=kin_nr, myOFT=myOFT,
     ) => """
-    import sys, os
     import numpy as np
-
-    oft_py = os.path.join(OFT_ROOT, "python")
-    sys.path = [p for p in sys.path
-                if not (p and p != oft_py
-                        and os.path.isfile(os.path.join(p, "OpenFUSIONToolkit", "__init__.py")))]
-    sys.path.insert(0, oft_py)
-
-    import OpenFUSIONToolkit as _oft_pkg
-    assert _oft_pkg.__file__.startswith(OFT_ROOT), (
-        f"Wrong OpenFUSIONToolkit loaded: {_oft_pkg.__file__} (wanted {OFT_ROOT})")
 
     from OpenFUSIONToolkit.TokaMaker import TokaMaker
     from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
@@ -291,6 +292,6 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     return result.mygs
 end
 
-function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py; oft_root::String)
-    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium, myOFT; oft_root)
+function setup_tokamaker_from_file!(device::Symbol, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py)
+    return setup_tokamaker_from_file!(Val(device), profiles, equilibrium, myOFT)
 end
