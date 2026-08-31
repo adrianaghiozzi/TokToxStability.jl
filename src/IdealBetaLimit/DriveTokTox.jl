@@ -15,15 +15,18 @@ Base.@kwdef mutable struct TMTXInput
     Ti_edge::Float64                              # keV
     pedestal::Dict{String,<:Any}
     plasma_composition::Dict{String,<:Any}        # e.g. Dict("main_ion"=>Dict("D"=>0.5,"T"=>0.5), "impurity"=>"Ne", "Zeff"=>1.7)
-    t_final::Float64            = 100.0           # s, long enough to equilibrate
-    tx_dt::Float64              = 0.5
-    torax_n_rho::Int            = 51
     heating::Dict{String,<:Any} = Dict{String,Any}("ecrh" => 0.0)
     fueling::Dict{String,<:Any} = Dict{String,Any}()
+end
+
+Base.@kwdef mutable struct TMTXSettings
     max_loop::Int                = 2
     t_ave_window::Float64        = 25.0
     kin_nr::Union{Int,Nothing}   = nothing         # # of psi points for output profiles; defaults to length(psi_sample)
     last_surface_factor::Float64 = 0.995
+    t_final::Float64            = 100.0           # s, long enough to equilibrate
+    tx_dt::Float64              = 0.5
+    torax_n_rho::Int            = 51
 end
 
 """
@@ -85,27 +88,27 @@ function build_seed_tokamaker(device::Symbol, tmtx_input::TMTXInput, myOFT::Py)
     return build_seed_tokamaker(Val(device), tmtx_input, myOFT)
 end
 
-function build_tmtx(tmtx_input::TMTXInput, mygs::Py)
+function build_tmtx(tmtx_input::TMTXInput, tmtx_settings::TMTXSettings, mygs::Py)
     pulse_design = pyimport("OpenFUSIONToolkit.TokaMaker.pulse_design")
     np           = pyimport("numpy")
 
-    tm_times = np.linspace(0.0, tmtx_input.t_final, 3)
+    tm_times = np.linspace(0.0, tmtx_settings.t_final, 3)
 
     tmtx = pulse_design.TokaMaker_TORAX(
         t_init=0.0,
-        t_final=tmtx_input.t_final,
-        tx_dt=tmtx_input.tx_dt,
-        eqtimes=np.array([0.0, tmtx_input.t_final]),
+        t_final=tmtx_settings.t_final,
+        tx_dt=tmtx_settings.tx_dt,
+        eqtimes=np.array([0.0, tmtx_settings.t_final]),
         g_eqdsk_arr=[tmtx_input.seed_geqdsk, tmtx_input.seed_geqdsk],  # fixed equilibrium -> time-independent
-        last_surface_factor=tmtx_input.last_surface_factor,
+        last_surface_factor=tmtx_settings.last_surface_factor,
         tm_times=tm_times,
         tokamaker_obj=mygs,
     )
     return tmtx
 end
 
-function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
-    tmtx.set_TORAX_grid(grid_type="n_rho", grid=tmtx_input.torax_n_rho)
+function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput, tmtx_settings::TMTXSettings)
+    tmtx.set_TORAX_grid(grid_type="n_rho", grid=tmtx_settings.torax_n_rho)
 
     tmtx.set_heating(; (Symbol(k) => v for (k, v) in tmtx_input.heating)...)
     tmtx.set_fueling(; (Symbol(k) => v for (k, v) in tmtx_input.fueling)...)
@@ -128,7 +131,7 @@ function configure_tmtx!(tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
     tmtx.set_evolve(density=true, Ti=true, Te=true, current=true)
 
     tmtx.set_diverted_shape_targets(
-        diverted_times=(0.0, tmtx_input.t_final),
+        diverted_times=(0.0, tmtx_settings.t_final),
         x_point_targets=tmtx_input.x_points,
         x_point_weight=100,
     )
@@ -161,15 +164,15 @@ function _patch_torax_progress_bar!()
     return nothing
 end
 
-function run_tmtx_steady_state!(tmtx::Py, tmtx_input::TMTXInput; verbose::Bool=false)
+function run_tmtx_steady_state!(tmtx::Py, tmtx_settings::TMTXSettings; verbose::Bool=false)
     _patch_torax_progress_bar!()
     quietly(; verbose) do
         tmtx.fly(
             run_name="tmtx_seed",
-            max_loop=tmtx_input.max_loop,
+            max_loop=tmtx_settings.max_loop,
             output_mode="normal",
             t_ave_toggle="on",
-            t_ave_window=tmtx_input.t_ave_window,
+            t_ave_window=tmtx_settings.t_ave_window,
             steady_state_mode=true,
         )
     end
@@ -206,8 +209,8 @@ function _profile_on_psi_out(dt::Py, varname::String, psi_out::Vector{Float64})
     return np.interp(psi_out, psi_at_grid, values) |> x -> pyconvert(Vector{Float64}, x)
 end
 
-function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equilibrium, tmtx::Py, mygs::Py, tmtx_input::TMTXInput)
-    kin_nr = something(tmtx_input.kin_nr, length(tmtx_input.psi_sample))
+function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equilibrium, tmtx::Py, mygs::Py, tmtx_input::TMTXInput, tmtx_settings::TMTXSettings)
+    kin_nr = something(tmtx_settings.kin_nr, length(tmtx_input.psi_sample))
 
     dt = tmtx._data_tree
     psi_out = collect(range(0.0, 1.0; length=kin_nr))
@@ -244,20 +247,20 @@ function extract_profiles_and_equilibrium!(profiles::Profiles, equilibrium::Equi
     return nothing
 end
 
-function setup_from_tmtx!(::Val{:D3D}, tmtx_input::TMTXInput, myOFT::Py; verbose::Bool=false)
+function setup_from_tmtx!(::Val{:D3D}, tmtx_input::TMTXInput, tmtx_settings::TMTXSettings, myOFT::Py; verbose::Bool=false)
     profiles = Profiles(Ti=nothing, Te=nothing, ni=nothing, ne=nothing,
     pressure=nothing, pprime=nothing)
     equilibrium = Equilibrium(Psi=nothing, Jphi=nothing, Ip_target=nothing)
     
     mygs, _eqdsk = build_seed_tokamaker(Val(:D3D), tmtx_input, myOFT)
-    tmtx = build_tmtx(tmtx_input, mygs)
-    configure_tmtx!(tmtx, mygs, tmtx_input)
-    run_tmtx_steady_state!(tmtx, tmtx_input; verbose)
-    extract_profiles_and_equilibrium!(profiles, equilibrium, tmtx, mygs, tmtx_input)
+    tmtx = build_tmtx(tmtx_input, tmtx_settings, mygs)
+    configure_tmtx!(tmtx, mygs, tmtx_input, tmtx_settings)
+    run_tmtx_steady_state!(tmtx, tmtx_settings; verbose)
+    extract_profiles_and_equilibrium!(profiles, equilibrium, tmtx, mygs, tmtx_input, tmtx_settings)
 
     return mygs, profiles, equilibrium
 end
 
-function setup_from_tmtx!(device::Symbol, tmtx_input::TMTXInput, myOFT::Py; verbose::Bool=false)
-    return setup_from_tmtx!(Val(device), tmtx_input, myOFT; verbose)
+function setup_from_tmtx!(device::Symbol, tmtx_input::TMTXInput, tmtx_settings::TMTXSettings, myOFT::Py; verbose::Bool=false)
+    return setup_from_tmtx!(Val(device), tmtx_input, tmtx_settings, myOFT; verbose)
 end
