@@ -17,6 +17,7 @@ GeneralizedPerturbedEquilibrium = {path = "/Users/adrianaghiozzi/Code/Sources/GP
 
 [compat]
 DataFrames = "1.8.2"
+DelimitedFiles = "1.9.1"
 Plots = "1.41.7"
 julia = "1.10.10"
 
