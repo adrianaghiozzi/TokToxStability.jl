@@ -1,7 +1,7 @@
 using Plots
 using PythonCall
 
-function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :ne, :pressure))
+function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :pressure))
     sorted = sort(collect(results); by=r -> r.fraction)
     panels = [begin
         p = plot(xlabel="psi", ylabel=String(q), legend=:topright, leftmargin=10Plots.mm)
