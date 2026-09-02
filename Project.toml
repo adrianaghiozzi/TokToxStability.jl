@@ -13,7 +13,7 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 
 [sources]
-GeneralizedPerturbedEquilibrium = {path = "/Users/adrianaghiozzi/Code/Sources/GPEC"}
+GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/GPEC.git", rev = "fix/resist-geometry-periodic-endpoint"}
 
 [compat]
 DataFrames = "1.8.2"
