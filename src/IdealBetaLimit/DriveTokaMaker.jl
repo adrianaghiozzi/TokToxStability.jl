@@ -50,16 +50,17 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
             run_GPEC(gpec_settings, basename(geqdsk_path), run_directory)
         end
         gp = read_output(gpec_raw)
+        pressure = pressure_profile(profiles)
 
         return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
-                p_axis=profiles.pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
+                p_axis=pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
                 dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
                 run_dir=(ephemeral ? nothing : run_directory), geqdsk_path=(ephemeral ? nothing : geqdsk_path),
                 # Per-iteration profile/q snapshots for plots.jl. `psi` is the
                 # grid `profiles`/`equilibrium` are already sampled on (post
                 # rescale_profile!), so these all line up index-for-index.
                 psi=copy(equilibrium.Psi), Te=copy(profiles.Te), Ti=copy(profiles.Ti),
-                ne=copy(profiles.ne), pressure=copy(profiles.pressure),
+                ne=copy(profiles.ne), pressure=pressure,
                 psi_q=pyconvert(Vector{Float64}, psi_q), q_profile=pyconvert(Vector{Float64}, q_profile))
     finally
         ephemeral && rm(base_dir; recursive=true, force=true)
@@ -175,13 +176,14 @@ function tokamaker_run(mygs::Py, profiles::Profiles, equilibrium::Equilibrium; n
         psi_b0 = pyconvert(Float64, psi_bounds[0])
         psi_b1 = pyconvert(Float64, psi_bounds[1])
 
-        profiles.pprime = numpy_like_gradient(profiles.pressure) ./
-                           (numpy_like_gradient(equilibrium.Psi) .* (psi_b1 - psi_b0))
+        pressure = pressure_profile(profiles)
+        pprime = numpy_like_gradient(pressure) ./
+                 (numpy_like_gradient(equilibrium.Psi) .* (psi_b1 - psi_b0))
 
-        mygs.set_targets(Ip=equilibrium.Ip_target, pax=profiles.pressure[1])
+        mygs.set_targets(Ip=equilibrium.Ip_target, pax=pressure[1])
 
         mygs.set_profiles(
-            pp_prof  = Dict("type" => "linterp",      "y" => profiles.pprime,  "x" => equilibrium.Psi),
+            pp_prof  = Dict("type" => "linterp",      "y" => pprime,  "x" => equilibrium.Psi),
             ffp_prof = Dict("type" => "jphi-linterp", "y" => equilibrium.Jphi,    "x" => equilibrium.Psi),
         )
 
@@ -218,22 +220,20 @@ function write_geqdsk_for_gpec(mygs::Py, run_directory::String, tag, nr::Int=257
 end
 
 function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profiles, equilibrium::TokToxStability.Equilibrium, myOFT::Py)
-    kin_nr = length(equilibrium.Psi)
+    kin_nr = length(profiles.Psi)
     d3d_case_dir = joinpath(pkgdir(TokToxStability), "cases", "D3D")
     mesh_file = joinpath(d3d_case_dir, "DIIID_mesh.h5")
-    geqdsk_file = joinpath(d3d_case_dir, "g147131.02300_DIIID_KEFIT.eqdsk")
 
     result = @pyexec (
-        MESH_FILE=mesh_file, GEQDSK_FILE=geqdsk_file,
-        psi_prof=equilibrium.Psi, kin_nr=kin_nr, myOFT=myOFT,
+        MESH_FILE=mesh_file,
+        rcentr=equilibrium.rcentr, bcentr=equilibrium.bcentr, ip=equilibrium.ip,
+        pax=equilibrium.pax, rzout=equilibrium.rzout, ffprim=equilibrium.ffprim, pprime=equilibrium.pprime,
+        psi_prof=profiles.Psi, kin_nr=kin_nr, myOFT=myOFT,
     ) => """
     import numpy as np
 
     from OpenFUSIONToolkit.TokaMaker import TokaMaker
     from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-    from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
-
-    eqdsk = read_eqdsk(GEQDSK_FILE)
 
     mygs  = TokaMaker(myOFT)
     mygs.settings.maxits = 200
@@ -241,13 +241,13 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     mesh_pts, mesh_lc, mesh_reg, coil_dict, cond_dict = load_gs_mesh(MESH_FILE)
     mygs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
     mygs.setup_regions(cond_dict=cond_dict, coil_dict=coil_dict)
-    mygs.setup(order=2, F0=abs(eqdsk["rcentr"] * eqdsk["bcentr"]))
+    mygs.setup(order=2, F0=abs(rcentr * bcentr))
 
     mygs.set_coil_vsc({"F9A": 1.0, "F9B": -1.0})
 
-    mygs.set_targets(Ip=abs(eqdsk["ip"]), pax=eqdsk["pres"][0])
+    mygs.set_targets(Ip=abs(ip), pax=pax)
 
-    isoflux_pts = eqdsk["rzout"].copy()
+    isoflux_pts = np.asarray(rzout)
     weights     = np.ones(isoflux_pts.shape[0]) * 50.0
     mygs.set_isoflux(isoflux_pts, weights=weights)
 
@@ -260,12 +260,10 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     reg_terms.append(mygs.coil_reg_term({"#VSC": 1.0}, target=0.0, weight=1.0e-2))
     mygs.set_coil_reg(reg_terms=reg_terms)
 
-    ffprim  = eqdsk["ffprim"]
-    pprime0 = eqdsk["pprime"]
-    psi_eqdsk = np.linspace(0.0, 1.0, np.size(ffprim))
+    psi_eqdsk = np.linspace(0.0, 1.0, len(ffprim))
 
     ffp_interp = np.interp(psi_prof, psi_eqdsk, ffprim)
-    pp_interp  = np.interp(psi_prof, psi_eqdsk, pprime0)
+    pp_interp  = np.interp(psi_prof, psi_eqdsk, pprime)
 
     mygs.set_profiles(
         ffp_prof={"type": "linterp", "y": ffp_interp, "x": psi_prof},
@@ -283,7 +281,7 @@ function setup_tokamaker_from_file!(::Val{:D3D}, profiles::TokToxStability.Profi
     R_avg, oneOverR_avg = ravgs_bl['<R>'], ravgs_bl['<1/R>']
     jphi_baseline = R_avg * pp_bl + oneOverR_avg * (f_bl * fp_bl) / mu0
 
-    ip_target = abs(eqdsk["ip"])
+    ip_target = abs(ip)
     """ => (mygs, psi_tkmkr::Vector{Float64}, jphi_baseline::Vector{Float64}, ip_target::Float64)
 
     equilibrium.Psi     = result.psi_tkmkr
