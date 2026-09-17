@@ -86,6 +86,14 @@ function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
     return p
 end
 
+const _SUPERSCRIPT_DIGITS = Dict('0'=>'⁰','1'=>'¹','2'=>'²','3'=>'³','4'=>'⁴','5'=>'⁵','6'=>'⁶','7'=>'⁷','8'=>'⁸','9'=>'⁹')
+_superscript(k::Int) = map(c -> _SUPERSCRIPT_DIGITS[c], string(k))
+
+# symlog transform (linear within [-linthresh, linthresh], log10-scaled beyond) so both
+# signs of Delta' can share one log-like axis -- matplotlib's 'symlog' with linthresh=1.
+_symlog(y::Real; linthresh::Real=1.0) =
+    abs(y) <= linthresh ? y / linthresh : sign(y) * (log10(abs(y) / linthresh) + 1)
+
 function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
     sorted = sort(collect(results); by=r -> r.fraction)
     beta_n = [r.beta_n for r in sorted]
@@ -95,11 +103,27 @@ function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
     any(present) || error("plot_delta_prime_scan: the $m/$n surface was not found (or had no Δ' matrix) " *
                            "at any scanned point -- nothing to plot.")
 
-    p = plot(beta_n[present], Float64.(dp[present]); seriestype=:scatter, markersize=6, label="scanned points",
-             xlabel="beta_N", ylabel="Delta' [1/m]", title="Classical linear tearing Δ' ($m/$n mode)",
-             legend=:topleft, leftmargin=8Plots.mm)
-    plot!(p, beta_n[present], Float64.(dp[present]); label=nothing, color=:steelblue, linewidth=1)
-    hline!(p, [0.0]; label="Delta' = 0", color=:black, linestyle=:dot)
+    beta_n, dp = beta_n[present], Float64.(dp[present])
+    y = _symlog.(dp)
+
+    # One decade of headroom past the largest positive/negative magnitude, each rounded up
+    # to its own power of ten so the ticks read as clean decades (10^0, 10^1, ... / -10^0, ...).
+    pos_max = maximum(dp; init=0.0)
+    neg_max = maximum(-dp; init=0.0)
+    top_exp = pos_max > 0 ? max(1, ceil(Int, log10(pos_max)) + 1) : 1
+    bot_exp = neg_max > 0 ? max(1, ceil(Int, log10(neg_max)) + 1) : 1
+
+    pos_ticks = [(_symlog(10.0^k), "10" * _superscript(k)) for k in 0:top_exp]
+    neg_ticks = [(_symlog(-10.0^k), "-10" * _superscript(k)) for k in 0:bot_exp]
+    all_ticks = vcat([(0.0, "0")], pos_ticks, neg_ticks)
+    yticks = ([t[1] for t in all_ticks], [t[2] for t in all_ticks])
+
+    p = plot(beta_n, y; seriestype=:scatter, markersize=6, label="scanned points",
+             xlabel="beta_N", ylabel="Delta' [1/m] (symlog)", title="Classical linear tearing Δ' ($m/$n mode)",
+             yticks=yticks, ylims=(_symlog(-10.0^bot_exp), _symlog(10.0^top_exp)),
+             legend=:topleft, leftmargin=12Plots.mm)
+    plot!(p, beta_n, y; label=nothing, color=:steelblue, linewidth=1)
+    hline!(p, [0.0]; label="Delta' = 0", color=:black, linestyle=:dash)
 
     any(!, present) && @warn "plot_delta_prime_scan: dropped $(count(!, present)) scanned point(s) where the " *
                               "$m/$n surface wasn't found."
