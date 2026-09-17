@@ -85,3 +85,24 @@ function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
 
     return p
 end
+
+function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
+    sorted = sort(collect(results); by=r -> r.fraction)
+    beta_n = [r.beta_n for r in sorted]
+    dp = [delta_prime_for_mode(r, m, n) for r in sorted]
+
+    present = .!ismissing.(dp)
+    any(present) || error("plot_delta_prime_scan: the $m/$n surface was not found (or had no Δ' matrix) " *
+                           "at any scanned point -- nothing to plot.")
+
+    p = plot(beta_n[present], Float64.(dp[present]); seriestype=:scatter, markersize=6, label="scanned points",
+             xlabel="beta_N", ylabel="Delta' [1/m]", title="Classical linear tearing Δ' ($m/$n mode)",
+             legend=:topleft, leftmargin=8Plots.mm)
+    plot!(p, beta_n[present], Float64.(dp[present]); label=nothing, color=:steelblue, linewidth=1)
+    hline!(p, [0.0]; label="Delta' = 0", color=:black, linestyle=:dot)
+
+    any(!, present) && @warn "plot_delta_prime_scan: dropped $(count(!, present)) scanned point(s) where the " *
+                              "$m/$n surface wasn't found."
+
+    return p
+end

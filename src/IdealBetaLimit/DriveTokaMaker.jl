@@ -55,6 +55,7 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
         return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
                 p_axis=pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
                 dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
+                delta_prime_matrix=gp.delta_prime_matrix, singular_surfaces=gp.singular_surfaces,
                 run_dir=(ephemeral ? nothing : run_directory), geqdsk_path=(ephemeral ? nothing : geqdsk_path),
                 # Per-iteration profile/q snapshots for plots.jl. `psi` is the
                 # grid `profiles`/`equilibrium` are already sampled on (post
