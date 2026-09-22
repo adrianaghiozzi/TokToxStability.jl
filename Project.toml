@@ -17,6 +17,7 @@ GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/G
 
 [compat]
 DataFrames = "1.8.2"
+DelimitedFiles = "1.9"
 Plots = "1.41.7"
 julia = "1.10.10"
 
