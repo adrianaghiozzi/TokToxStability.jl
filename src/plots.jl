@@ -60,6 +60,8 @@ function plot_equilibrium(result; nlevels::Int=25, python_site_packages::Union{N
     return p
 end
 
+# --- Ideal beta limit (external kink) -----------------------------------------------------------
+
 function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
     sorted = sort(collect(results); by=r -> r.fraction)
     fraction = [r.fraction for r in sorted]
@@ -86,6 +88,8 @@ function plot_beta_scan_summary(results::AbstractVector; beta_limit=nothing)
     return p
 end
 
+# --- Tearing stability -----------------------------------------------------------------------
+
 const _SUPERSCRIPT_DIGITS = Dict('0'=>'⁰','1'=>'¹','2'=>'²','3'=>'³','4'=>'⁴','5'=>'⁵','6'=>'⁶','7'=>'⁷','8'=>'⁸','9'=>'⁹')
 _superscript(k::Int) = map(c -> _SUPERSCRIPT_DIGITS[c], string(k))
 
@@ -93,6 +97,19 @@ _superscript(k::Int) = map(c -> _SUPERSCRIPT_DIGITS[c], string(k))
 # signs of Delta' can share one log-like axis -- matplotlib's 'symlog' with linthresh=1.
 _symlog(y::Real; linthresh::Real=1.0) =
     abs(y) <= linthresh ? y / linthresh : sign(y) * (log10(abs(y) / linthresh) + 1)
+
+function _symlog_yticks(values::AbstractVector{<:Real})
+    pos_max = maximum(values; init=0.0)
+    neg_max = maximum(-values; init=0.0)
+    top_exp = pos_max > 0 ? max(1, ceil(Int, log10(pos_max)) + 1) : 1
+    bot_exp = neg_max > 0 ? max(1, ceil(Int, log10(neg_max)) + 1) : 1
+
+    pos_ticks = [(_symlog(10.0^k), "10" * _superscript(k)) for k in 0:top_exp]
+    neg_ticks = [(_symlog(-10.0^k), "-10" * _superscript(k)) for k in 0:bot_exp]
+    all_ticks = vcat([(0.0, "0")], pos_ticks, neg_ticks)
+    yticks = ([t[1] for t in all_ticks], [t[2] for t in all_ticks])
+    return yticks, (_symlog(-10.0^bot_exp), _symlog(10.0^top_exp))
+end
 
 function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
     sorted = sort(collect(results); by=r -> r.fraction)
@@ -105,22 +122,11 @@ function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
 
     beta_n, dp = beta_n[present], Float64.(dp[present])
     y = _symlog.(dp)
-
-    # One decade of headroom past the largest positive/negative magnitude, each rounded up
-    # to its own power of ten so the ticks read as clean decades (10^0, 10^1, ... / -10^0, ...).
-    pos_max = maximum(dp; init=0.0)
-    neg_max = maximum(-dp; init=0.0)
-    top_exp = pos_max > 0 ? max(1, ceil(Int, log10(pos_max)) + 1) : 1
-    bot_exp = neg_max > 0 ? max(1, ceil(Int, log10(neg_max)) + 1) : 1
-
-    pos_ticks = [(_symlog(10.0^k), "10" * _superscript(k)) for k in 0:top_exp]
-    neg_ticks = [(_symlog(-10.0^k), "-10" * _superscript(k)) for k in 0:bot_exp]
-    all_ticks = vcat([(0.0, "0")], pos_ticks, neg_ticks)
-    yticks = ([t[1] for t in all_ticks], [t[2] for t in all_ticks])
+    yticks, ylims = _symlog_yticks(dp)
 
     p = plot(beta_n, y; seriestype=:scatter, markersize=6, label="scanned points",
              xlabel="beta_N", ylabel="Delta' [1/m] (symlog)", title="Classical linear tearing Δ' ($m/$n mode)",
-             yticks=yticks, ylims=(_symlog(-10.0^bot_exp), _symlog(10.0^top_exp)),
+             yticks=yticks, ylims=ylims,
              legend=:topleft, leftmargin=12Plots.mm)
     plot!(p, beta_n, y; label=nothing, color=:steelblue, linewidth=1)
     hline!(p, [0.0]; label="Delta' = 0", color=:black, linestyle=:dash)
@@ -130,3 +136,41 @@ function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
 
     return p
 end
+
+"""
+    plot_delta_eff_scan(results::AbstractVector, m::Int, n::Int)
+
+Overlay the classical Δ' and the Glasser-stabilized `Delta_eff = Delta' - Delta_crit` for the
+`(m, n)` mode across a scan, on one symlog axis (see `plot_delta_prime_scan`). Scanned points need
+`glasser_terms` populated (i.e. run through a workflow whose `profiles.omega` was set --
+`load_default_settings_tearing` plus a `.kin` file with a `wexb(rad/s)` column).
+"""
+function plot_delta_eff_scan(results::AbstractVector, m::Int, n::Int)
+    sorted = sort(collect(results); by=r -> r.fraction)
+    beta_n_all = [r.beta_n for r in sorted]
+    dp_all = [delta_prime_for_mode(r, m, n) for r in sorted]
+    de_all = [delta_eff_for_mode(r, m, n) for r in sorted]
+
+    dp_present = .!ismissing.(dp_all)
+    de_present = .!ismissing.(de_all)
+    any(de_present) || error("plot_delta_eff_scan: no scanned point has a Delta_eff for the $m/$n " *
+                              "mode -- either the surface wasn't found, or glasser_terms is missing " *
+                              "(profiles.omega must be set when the scan was run).")
+
+    beta_n_dp, dp = beta_n_all[dp_present], Float64.(dp_all[dp_present])
+    beta_n_de, de = beta_n_all[de_present], Float64.(de_all[de_present])
+    yticks, ylims = _symlog_yticks(vcat(dp, de))
+
+    p = plot(beta_n_dp, _symlog.(dp); seriestype=:scatter, markersize=6, label="Delta' (ideal-MHD)",
+             color=:steelblue, xlabel="beta_N", ylabel="Delta' [1/m] (symlog)",
+             title="Glasser stabilization at the $m/$n surface", yticks=yticks, ylims=ylims,
+             legend=:topleft, leftmargin=12Plots.mm)
+    plot!(p, beta_n_dp, _symlog.(dp); label=nothing, color=:steelblue, linewidth=1, linestyle=:dash)
+    plot!(p, beta_n_de, _symlog.(de); seriestype=:scatter, markersize=6,
+          label="Delta_eff = Delta' - Delta_crit", color=:firebrick)
+    plot!(p, beta_n_de, _symlog.(de); label=nothing, color=:firebrick, linewidth=1)
+    hline!(p, [0.0]; label="= 0", color=:black, linestyle=:dot)
+
+    return p
+end
+

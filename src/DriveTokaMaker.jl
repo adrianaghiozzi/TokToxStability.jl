@@ -52,10 +52,20 @@ function evaluate_factor(mygs::Py, profiles::Profiles, equilibrium::Equilibrium,
         gp = read_output(gpec_raw)
         pressure = pressure_profile(profiles)
 
+        # Glasser/inner-layer terms (D_R, Delta_crit, ...) need profiles.omega (E x B rotation),
+        # only populated when the kinetic file carries wexb(rad/s) -- i.e. the tearing workflow.
+        # gpec_raw (and its ffs.equil/ffs.surfaces) isn't kept past this function, so compute this
+        # here rather than deferring it to a later readout step like delta_prime_for_mode.
+        glasser_terms = profiles.omega === nothing ? nothing :
+                        quietly(; verbose) do
+                            compute_glasser_terms(gpec_raw, profiles, gpec_settings)
+                        end
+
         return (fraction=fraction, tag=tag, beta_n=beta_n, beta_t=beta_t, l_i=l_i,
                 p_axis=pressure[1], dW_total=gp.dW_total, dW_plasma=gp.dW_plasma,
                 dW_vacuum=gp.dW_vacuum, q0=gp.q0, qmax=gp.qmax, msing=gp.msing,
                 delta_prime_matrix=gp.delta_prime_matrix, singular_surfaces=gp.singular_surfaces,
+                glasser_terms=glasser_terms,
                 run_dir=(ephemeral ? nothing : run_directory), geqdsk_path=(ephemeral ? nothing : geqdsk_path),
                 # Per-iteration profile/q snapshots for plots.jl. `psi` is the
                 # grid `profiles`/`equilibrium` are already sampled on (post
@@ -112,61 +122,6 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
                                       "cascading into future scans."
 
     return results
-end
-
-function _interp_zero_crossing(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
-    order = sortperm(xs)
-    xs, ys = xs[order], ys[order]
-
-    for i in 1:length(xs)-1
-        if ys[i] >= 0 && ys[i+1] < 0
-            t = ys[i] / (ys[i] - ys[i+1])
-            crossing = xs[i] + t * (xs[i+1] - xs[i])
-            return (crossing=crossing, lo=xs[i], hi=xs[i+1], bracketed=true)
-        end
-    end
-
-    n = length(xs)
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-    denom = sum((xs .- mean_x) .^ 2)
-    denom == 0 && error("_interp_zero_crossing: all x values are identical -- cannot fit a line.")
-    slope = sum((xs .- mean_x) .* (ys .- mean_y)) / denom
-    slope == 0 && error("_interp_zero_crossing: y values are flat (zero slope) -- cannot extrapolate a crossing.")
-    intercept = mean_y - slope * mean_x
-    crossing = -intercept / slope
-
-    return (crossing=crossing, lo=first(xs), hi=last(xs), bracketed=false)
-end
-
-function estimate_beta_limit(results::AbstractVector; verbose::Bool=true)
-    length(results) >= 2 || error("estimate_beta_limit needs at least 2 scanned points, got $(length(results))")
-
-    beta_n = [r.beta_n for r in results]
-    dW = [r.dW_total for r in results]
-    res = _interp_zero_crossing(beta_n, dW)
-
-    if res.bracketed
-        verbose && println(
-            "estimate_beta_limit: dW_total crossing bracketed between the scanned points " *
-            "beta_N=$(round(res.lo; digits=4)) and beta_N=$(round(res.hi; digits=4)) -- " *
-            "interpolated crossing at beta_N=$(round(res.crossing; digits=4))."
-        )
-        return (beta_n_crossing=res.crossing, beta_n_lo=res.lo, beta_n_hi=res.hi, bracketed=true)
-    end
-
-    @warn "estimate_beta_limit: no stable->unstable dW_total transition found across the " *
-          "$(length(results)) scanned points (beta_n in [$(res.lo), $(res.hi)]) -- " *
-          "extrapolating a line through the scanned points instead of interpolating between " *
-          "bracketing points. Treat the resulting beta_N as a rough guess, not a calculated bound; " *
-          "scan further to actually bracket the crossing."
-
-    verbose && println(
-        "estimate_beta_limit: extrapolated (unbracketed) crossing at beta_N=$(round(res.crossing; digits=4)), " *
-        "from a line fit through beta_N in [$(round(res.lo; digits=4)), $(round(res.hi; digits=4))]."
-    )
-
-    return (beta_n_crossing=res.crossing, beta_n_lo=res.lo, beta_n_hi=res.hi, bracketed=false)
 end
 
 function tokamaker_run(mygs::Py, profiles::Profiles, equilibrium::Equilibrium; n_settle::Int = 3)

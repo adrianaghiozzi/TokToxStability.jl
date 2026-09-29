@@ -7,6 +7,13 @@ Base.@kwdef mutable struct GPECSettings
     kinetic_source::String = "fixed"               # "fixed" or "calculated"
     kinetic_factor::Real = 0.0
     parallel_threads::Int = 2
+    # Inner-layer / Glasser stabilization inputs (Tearing workflow only -- ignored by the
+    # ideal kink workflow). Not part of gpec.toml; passed straight to GPEC's
+    # InnerLayer.SLAYER.build_slayer_inputs by TearingStability/Tearing.jl.
+    chi_perp::Real = 1.0                           # perpendicular heat diffusivity [m^2/s]
+    zeff::Real = 1.5                               # effective charge
+    mu_i::Real = 2.0                               # ion mass in proton-mass units (2.0 = D)
+    dc_type::Symbol = :rfitzp                      # critical-Delta formula selector (see SLAYERParameters)
 end
 
 function _resolve_wall(wall, a)
@@ -57,33 +64,6 @@ function read_output(output::NamedTuple)
         msing = length(ffs.surfaces),
         delta_prime_matrix = delta_prime_matrix,  # classical linear tearing Δ' (PEST3 convention, ideal-MHD, kinetic_factor=0)
         singular_surfaces = singular_surfaces)
-end
-
-"""
-    delta_prime_for_mode(result, m::Int, n::Int)
-
-Classical linear tearing Δ' [1/m] for the rational surface resonant with poloidal/toroidal
-mode numbers `(m, n)` (e.g. `(2, 1)` for the 2/1 mode), picked out of `result.delta_prime_matrix`
-using `result.singular_surfaces` to find the matching row/column. `result` can be the NamedTuple
-returned by `read_output` or a per-fraction row from a scan (anything exposing those two fields).
-
-Returns `missing` if GPEC found no Δ' matrix (e.g. a kinetic run, or no rational surfaces), or if
-`(m, n)` doesn't resonate with any surface in this equilibrium (common at low pressure/current,
-before that surface has entered the plasma).
-"""
-function delta_prime_for_mode(result, m::Int, n::Int)
-    result.delta_prime_matrix === nothing && return missing
-    surfaces = result.singular_surfaces
-    if size(result.delta_prime_matrix, 1) != length(surfaces)
-        @warn "delta_prime_for_mode: delta_prime_matrix is $(size(result.delta_prime_matrix, 1))x... but " *
-              "there are $(length(surfaces)) singular_surfaces -- GPEC excluded some surfaces from the " *
-              "Δ' BVP (see compute_delta_prime_matrix! debug log), so the row/column mapping used here " *
-              "is unreliable. Inspect result.singular_surfaces / the GPEC log directly."
-        return missing
-    end
-    i = findfirst(s -> m in s.m && n in s.n, surfaces)
-    i === nothing && return missing
-    return real(result.delta_prime_matrix[i, i])
 end
 
 function make_gpec_toml(equilibrium_filename, toroidal_mode_number, wall, kinetic; parallel_threads::Integer=2) # eventually get rid of file writing in favor of direct calls to GPEC functions
