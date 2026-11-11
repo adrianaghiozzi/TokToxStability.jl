@@ -1,4 +1,4 @@
 /Manifest*.toml
-/.CondaPkg/meta
+/.CondaPkg/
 .ipynb_checkpoints/
 .venv/
