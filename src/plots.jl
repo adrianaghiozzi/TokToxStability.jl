@@ -1,5 +1,6 @@
 using Plots
 using PythonCall
+using LaTeXStrings
 
 function plot_profiles(results::AbstractVector; quantities=(:Te, :Ti, :pressure))
     sorted = sort(collect(results); by=r -> r.fraction)
@@ -125,7 +126,7 @@ function plot_delta_prime_scan(results::AbstractVector, m::Int, n::Int)
     yticks, ylims = _symlog_yticks(dp)
 
     p = plot(beta_n, y; seriestype=:scatter, markersize=6, label="scanned points",
-             xlabel="beta_N", ylabel="Delta' [1/m] (symlog)", title="Classical linear tearing Δ' ($m/$n mode)",
+             xlabel="βₙ", ylabel="Δ' [m⁻¹]", title="Classical linear tearing Δ' ($m/$n mode)",
              yticks=yticks, ylims=ylims,
              legend=:topleft, leftmargin=12Plots.mm)
     plot!(p, beta_n, y; label=nothing, color=:steelblue, linewidth=1)
@@ -161,13 +162,13 @@ function plot_delta_eff_scan(results::AbstractVector, m::Int, n::Int)
     beta_n_de, de = beta_n_all[de_present], Float64.(de_all[de_present])
     yticks, ylims = _symlog_yticks(vcat(dp, de))
 
-    p = plot(beta_n_dp, _symlog.(dp); seriestype=:scatter, markersize=6, label="Delta' (ideal-MHD)",
-             color=:steelblue, xlabel="beta_N", ylabel="Delta' [1/m] (symlog)",
+    p = plot(beta_n_dp, _symlog.(dp); seriestype=:scatter, markersize=6, label=L"\Delta'",
+             color=:steelblue, xlabel="βₙ", ylabel="Δ' [m⁻¹]",
              title="Glasser stabilization at the $m/$n surface", yticks=yticks, ylims=ylims,
              legend=:topleft, leftmargin=12Plots.mm)
     plot!(p, beta_n_dp, _symlog.(dp); label=nothing, color=:steelblue, linewidth=1, linestyle=:dash)
     plot!(p, beta_n_de, _symlog.(de); seriestype=:scatter, markersize=6,
-          label="Delta_eff = Delta' - Delta_crit", color=:firebrick)
+          label=L"\Delta_{eff} = \Delta' - \Delta_{crit}", color=:firebrick)
     plot!(p, beta_n_de, _symlog.(de); label=nothing, color=:firebrick, linewidth=1)
     hline!(p, [0.0]; label="= 0", color=:black, linestyle=:dot)
 
