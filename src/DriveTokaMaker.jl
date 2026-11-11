@@ -6,11 +6,23 @@ default_tag(fraction::Real) = "f" * replace(@sprintf("%.4f", fraction), "." => "
 
 _is_tokamaker_solve_failure(e) = e isa ErrorException && startswith(e.msg, "TokaMaker did not converge")
 
+# A scan skips points that fail (e.g. TokaMaker not converging at high pressure), but if *every*
+# point fails the cause is almost always systematic (bad gpec.toml, API mismatch), so surface it.
+function _warn_scan_failure(fn::String, fraction, e)
+    @warn "$fn: fraction = $fraction failed and was skipped" exception = e
+end
+function _check_scan_not_all_failed(fn::String, results, n_failed::Int, last_error)
+    if isempty(results) && n_failed > 0
+        error("$fn: all $n_failed scan points failed; the last error was:\n" * sprint(showerror, last_error))
+    end
+end
+
 function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibrium, profiles::Profiles,
                       gpec_settings::GPECSettings; working_directory::Union{String,Nothing}=nothing, verbose::Bool = false)
     psi_baseline = mygs.get_psi(normalized=false)
     coarse_scan_results = []
     mygs_possibly_corrupted = false
+    n_failed, last_error = 0, nothing
     for fraction in fractions
         try
             mygs.set_psi(psi_baseline, update_bounds=true)
@@ -18,7 +30,8 @@ function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibri
             push!(coarse_scan_results, result)
         catch e
             _is_tokamaker_solve_failure(e) && (mygs_possibly_corrupted = true)
-            println(e)
+            _warn_scan_failure("coarse_scan", fraction, e)
+            n_failed += 1; last_error = e
             continue
         end
     end
@@ -27,6 +40,7 @@ function coarse_scan(mygs::Py, fractions::Vector{<:Real}, equilibrium::Equilibri
                                       "(e.g. via `setup_from_tmtx!`/`setup_tokamaker_from_file!`) before running " *
                                       "another scan on it -- reusing this `mygs` risks the failure cascading into " *
                                       "future scans."
+    _check_scan_not_all_failed("coarse_scan", coarse_scan_results, n_failed, last_error)
     return coarse_scan_results
 end
 
@@ -89,6 +103,7 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
     fraction = start_fraction
     attempts = 0
     mygs_possibly_corrupted = false
+    n_failed, last_error = 0, nothing
     while attempts < max_fractions
         attempts += 1
         mygs.set_psi(psi_baseline, update_bounds=true)
@@ -96,7 +111,8 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
             evaluate_factor(mygs, deepcopy(profiles), deepcopy(equilibrium), fraction, gpec_settings; working_directory, verbose)
         catch e
             _is_tokamaker_solve_failure(e) && (mygs_possibly_corrupted = true)
-            println(e)
+            _warn_scan_failure("coarse_scan_until_unstable", fraction, e)
+            n_failed += 1; last_error = e
             nothing
         end
 
@@ -110,6 +126,8 @@ function coarse_scan_until_unstable(mygs::Py, start_fraction::Real, step::Real, 
 
         fraction += step
     end
+
+    _check_scan_not_all_failed("coarse_scan_until_unstable", results, n_failed, last_error)
 
     crossed_at === nothing && @warn "coarse_scan_until_unstable: dW_total never went negative within " *
                                      "max_fractions=$max_fractions (last fraction tried = $(fraction - step)) " *

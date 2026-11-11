@@ -22,7 +22,8 @@ ENV["JULIA_PYTHONCALL_EXE"] = "/absolute/path/to/TokToxStability/.venv/bin/pytho
 using TokToxStability
 ```
 
-`setup_venv.sh` prints the exact path to use. See `requirements.txt` for why this can't
-just be a `CondaPkg.toml` -- the OFT build this package needs is a pre-release only
-published to TestPyPI, and neither `pip`'s standard flags nor CondaPkg's pixi backend
-can express that combination through `CondaPkg.toml` alone.
+`setup_venv.sh` prints the exact path to use. Python versions are pinned in
+`requirements.txt`: stable OpenFUSIONToolkit from PyPI, and TORAX held at 1.4.x because
+OFT's TokaMaker+TORAX coupling does not yet support TORAX 2.x.
+
+GPEC v2 requires Julia 1.11 or newer.

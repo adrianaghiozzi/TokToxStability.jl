@@ -3,12 +3,12 @@
 
 `GPECSettings` set up the way the ideal (external kink) beta-limit workflow needs them:
 ideal-MHD (`kinetic_factor=0.0`), free-boundary energies enabled via `run_GPEC`/`make_gpec_toml`.
-Extra `kwargs` are forwarded to `GPECSettings` (e.g. `parallel_threads`).
+Extra `kwargs` are forwarded to `GPECSettings`.
 """
 function load_default_settings_kink(toroidal_mode_number::Int;
                                      wall::Union{Bool,Dict{String,<:Any}}=false,
                                      a::Union{Real,Nothing}=nothing, kwargs...)
-    return GPECSettings(; toroidal_mode_number, wall, a, kinetic_source="fixed", kinetic_factor=0.0, kwargs...)
+    return GPECSettings(; toroidal_mode_number, wall, a, kinetic_factor=0.0, kwargs...)
 end
 
 function _interp_zero_crossing(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})

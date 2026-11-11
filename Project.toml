@@ -14,16 +14,17 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 
 [sources]
-GeneralizedPerturbedEquilibrium = {rev = "fix/resist-geometry-periodic-endpoint", url = "https://github.com/OpenFUSIONToolkit/GPEC.git"}
+GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/GPEC.git", rev = "v2.0.1"}
 
 [compat]
 DataFrames = "1.8.2"
 LaTeXStrings = "1.4.1"
 Plots = "1.41.7"
-julia = "1.10.10"
+julia = "1.11"
 
 [extras]
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["TOML", "Test"]

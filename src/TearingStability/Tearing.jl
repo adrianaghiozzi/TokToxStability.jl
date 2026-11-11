@@ -1,19 +1,19 @@
 """
     load_default_settings_tearing(toroidal_mode_number; wall=false, a=nothing,
-                                   chi_perp=1.0, zeff=1.5, dc_type=:rfitzp, mu_i=2.0, kwargs...)
+                                   chi_perp=1.0, zeff=1.5, dc_type=:fitzpatrick, mu_i=2.0, kwargs...)
 
 `GPECSettings` set up the way the tearing-stability workflow needs them: ideal-MHD
 (`kinetic_factor=0.0`, matching Leuthold et al.'s Delta_eff = Delta' - Delta_crit split, since the
 Glasser/chi_parallel-matching correction is applied on top of the classical ideal-MHD Delta'), plus
 the inner-layer inputs (`chi_perp`, `zeff`, `dc_type`, `mu_i`) `compute_glasser_terms` needs. Extra
-`kwargs` are forwarded to `GPECSettings` (e.g. `parallel_threads`).
+`kwargs` are forwarded to `GPECSettings`.
 """
 function load_default_settings_tearing(toroidal_mode_number::Int;
                                         wall::Union{Bool,Dict{String,<:Any}}=false,
                                         a::Union{Real,Nothing}=nothing,
                                         chi_perp::Real=1.0, zeff::Real=1.5,
-                                        dc_type::Symbol=:rfitzp, mu_i::Real=2.0, kwargs...)
-    return GPECSettings(; toroidal_mode_number, wall, a, kinetic_source="fixed", kinetic_factor=0.0,
+                                        dc_type::Symbol=:fitzpatrick, mu_i::Real=2.0, kwargs...)
+    return GPECSettings(; toroidal_mode_number, wall, a, kinetic_factor=0.0,
                          chi_perp, zeff, dc_type, mu_i, kwargs...)
 end
 
@@ -72,21 +72,17 @@ function compute_glasser_terms(gpec_raw, profiles::Profiles, gpec_settings::GPEC
     ffs = gpec_raw.ffs
     isempty(ffs.surfaces) && return NamedTuple[]
 
-    # omega_e/omega_i (electron/ion diamagnetic frequencies) are required by the KineticProfiles/
-    # SLAYERParameters constructors but don't enter dc_tmp at all with dc_type=:rfitzp (only
-    # dr_val/chi_perp/t_e/zeff/tau_ee/rs/R0/sval_r/n do; build_slayer_inputs also recomputes its
-    # own omega_star from n_e/T_e/T_i by default) -- offset omega_i from omega only to satisfy
-    # KineticProfiles' spline construction.
-    omega_i = (-1.0 .* profiles.omega) .- 1.0
-
+    # GPEC v2's KineticProfiles carries only n_e, T_e, T_i and the E x B rotation; build_slayer_inputs
+    # derives the diamagnetic frequencies itself from the density/temperature splines.
     kinetic_profiles = GeneralizedPerturbedEquilibrium.Utilities.KineticProfiles(;
-        psi=profiles.Psi, n_e=profiles.ne, T_e=profiles.Te, T_i=profiles.Ti,
-        omega=profiles.omega, omega_e=profiles.omega, omega_i=omega_i)
+        psi=profiles.Psi, n_e=profiles.ne, T_e=profiles.Te, T_i=profiles.Ti, omega_E=profiles.omega)
 
     params = GeneralizedPerturbedEquilibrium.InnerLayer.SLAYER.build_slayer_inputs(
         ffs.equil, ffs.surfaces, kinetic_profiles;
         mu_i=gpec_settings.mu_i, zeff=gpec_settings.zeff,
-        chi_perp=gpec_settings.chi_perp, chi_tor=gpec_settings.chi_perp,
+        # One chi_perp drives every diffusivity. Delta_crit (dc_tmp) only uses chi_perp_e; chi_perp_i
+        # is required by GPEC v2's default P_perp_model = :D_perp, which we don't read out.
+        chi_perp_e=gpec_settings.chi_perp, chi_perp_i=gpec_settings.chi_perp, chi_tor=gpec_settings.chi_perp,
         dc_type=gpec_settings.dc_type)
 
     return [(m=p.m, n=p.n, delta_crit=p.dc_tmp, D_R=p.dr_val, rs=p.rs, R0=p.R0,
