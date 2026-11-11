@@ -13,11 +13,6 @@ cd "$(dirname "$0")"
 PY_VERSION="3.12"
 VENV_DIR=".venv"
 
-# OFT dev build lives on TestPyPI; keep this in sync with requirements.txt.
-OFT_PIN="OpenFUSIONToolkit==26.6.dev16"
-TESTPYPI="https://test.pypi.org/simple/"
-PYPI="https://pypi.org/simple/"
-
 echo ">> Creating $VENV_DIR (Python $PY_VERSION)"
 if command -v uv >/dev/null 2>&1; then
     uv venv --python "$PY_VERSION" "$VENV_DIR"
@@ -29,16 +24,8 @@ else
     "$PY" -m pip install --upgrade pip
 fi
 
-echo ">> Installing TORAX, omfit_classes, and helpers (from PyPI)"
-"$PY" -m pip install "torax==1.4.*" omfit_classes uncertainties h5py setuptools
-
-echo ">> Installing OFT dev build $OFT_PIN (from TestPyPI)"
-# TestPyPI is primary (it carries the dev build); PyPI is the extra index for
-# ordinary dependencies. The exact == pin stops pip falling back to stable 26.6.
-"$PY" -m pip install --pre \
-    --index-url "$TESTPYPI" \
-    --extra-index-url "$PYPI" \
-    "$OFT_PIN"
+echo ">> Installing OpenFUSIONToolkit, TORAX, and helpers (from requirements.txt)"
+"$PY" -m pip install -r requirements.txt
 
 echo ""
 echo ">> Done. Installed:"

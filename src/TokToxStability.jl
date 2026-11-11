@@ -1,13 +1,14 @@
 module TokToxStability
-# general utility functions
+# shared utilities
 include("utils.jl")
 include("plots.jl")
+include("GPEC.jl")
+include("DriveTokaMaker.jl")
+include("DriveTokTox.jl")
 
+# ideal beta limit (external kink stability)
+include("IdealBetaLimit/Kink.jl")
 
-# ideal beta limit 
-include("IdealBetaLimit/DriveGPEC.jl")
-include("IdealBetaLimit/DriveTokTox.jl")
-include("IdealBetaLimit/DriveTokaMaker.jl")
-
-# future channels here e.g. tearing stability
+# tearing stability
+include("TearingStability/Tearing.jl")
 end

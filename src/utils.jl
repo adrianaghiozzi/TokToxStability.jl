@@ -9,6 +9,7 @@ Base.@kwdef mutable struct Profiles
     ni::Union{Vector{Float64},Nothing} = nothing
     ne::Union{Vector{Float64},Nothing} = nothing
     Psi::Union{Vector{Float64},Nothing} = nothing
+    omega::Union{Vector{Float64},Nothing} = nothing  # E x B rotation [rad/s], tearing/Glasser workflow only
 end
 
 Base.@kwdef mutable struct Equilibrium
@@ -38,6 +39,7 @@ function read_kinetic_profiles_from_file(path::String)
         ni = col("ni(m^-3)"),
         ne = col("ne(m^-3)"),
         Psi = col("psi"),
+        omega = haskey(cols, "wexb(rad/s)") ? col("wexb(rad/s)") : nothing,
     )
 end
 
