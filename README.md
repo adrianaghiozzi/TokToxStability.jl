@@ -27,3 +27,13 @@ using TokToxStability
 OFT's TokaMaker+TORAX coupling does not yet support TORAX 2.x.
 
 GPEC v2 requires Julia 1.11 or newer.
+
+## Running the tests
+
+The tests don't call into Python, but PythonCall still has to load, so point it at the venv
+(or any Python 3.12+) the same way:
+
+```sh
+JULIA_CONDAPKG_BACKEND=Null JULIA_PYTHONCALL_EXE="$PWD/.venv/bin/python" \
+    julia --project=. -e 'using Pkg; Pkg.test()'
+```
