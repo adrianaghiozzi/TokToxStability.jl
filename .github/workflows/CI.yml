@@ -35,7 +35,7 @@ jobs:
       # PythonCall must load for `using TokToxStability`, but the tests never call into Python.
       # Use a plain system Python (as the notebooks use a venv) instead of CondaPkg, whose
       # auto-managed env breaks inside Pkg.test's sandbox and on Julia nightly.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         id: python
         with:
           python-version: '3.12'
