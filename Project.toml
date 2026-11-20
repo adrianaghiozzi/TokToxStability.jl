@@ -14,9 +14,6 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 
 [sources]
-# GPEC is not in the General registry, so it is installed from GitHub. `main` is GPEC's release
-# branch (it only moves when a release is cut; day-to-day work lands on `develop`), and the
-# [compat] bound below keeps it on 2.x. Once GPEC is registered, delete this section.
 GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/GPEC.git", rev = "main"}
 
 [compat]
