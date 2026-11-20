@@ -19,10 +19,20 @@ if command -v uv >/dev/null 2>&1; then
     PY="$VENV_DIR/bin/python"
     uv pip install --python "$PY" pip
 else
-    python"$PY_VERSION" -m venv "$VENV_DIR" 2>/dev/null || python3 -m venv "$VENV_DIR"
+    python"$PY_VERSION" -m venv --clear "$VENV_DIR" 2>/dev/null || python3 -m venv --clear "$VENV_DIR"
     PY="$VENV_DIR/bin/python"
     "$PY" -m pip install --upgrade pip
 fi
+
+# A venv only links to its base interpreter. If that base is PythonCall/CondaPkg's managed
+# Python (.CondaPkg/), CondaPkg can upgrade it underneath us and break the venv.
+BASE="$("$PY" -c 'import sys; print(sys.base_prefix)')"
+case "$BASE" in
+    *.CondaPkg*)
+        echo "!! $VENV_DIR was built on CondaPkg's Python ($BASE)." >&2
+        echo "!! Put a system Python 3.12+ first on PATH (e.g. 'brew install python@3.12' or uv) and re-run." >&2
+        exit 1 ;;
+esac
 
 echo ">> Installing OpenFUSIONToolkit, TORAX, and helpers (from requirements.txt)"
 "$PY" -m pip install -r requirements.txt
