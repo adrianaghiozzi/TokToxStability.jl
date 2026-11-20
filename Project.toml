@@ -14,10 +14,11 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 
 [sources]
-GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/GPEC.git", rev = "v2.0.1"}
+GeneralizedPerturbedEquilibrium = {url = "https://github.com/OpenFUSIONToolkit/GPEC.git", rev = "main"}
 
 [compat]
 DataFrames = "1.8.2"
+GeneralizedPerturbedEquilibrium = "2"
 LaTeXStrings = "1.4.1"
 Plots = "1.41.7"
 julia = "1.11"

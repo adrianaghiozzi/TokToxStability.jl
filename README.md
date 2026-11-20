@@ -28,6 +28,12 @@ OFT's TokaMaker+TORAX coupling does not yet support TORAX 2.x.
 
 GPEC v2 requires Julia 1.11 or newer.
 
+GPEC is not in the General registry, so `Project.toml`'s `[sources]` installs it from GitHub,
+following `main`, GPEC's release branch. Day-to-day GPEC development lands on `develop`, and
+`main` only moves when a release is cut. The `[compat]` bound (`GeneralizedPerturbedEquilibrium = "2"`)
+keeps it on 2.x, and Pkg enforces that bound for URL sources too. `Pkg.update()` picks up new GPEC
+releases. Once GPEC is registered, delete the `[sources]` entry.
+
 ## Running the tests
 
 The tests don't call into Python, but PythonCall still has to load, so point it at the venv
